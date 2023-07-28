@@ -414,6 +414,10 @@ ServerBase::take_data_by_entity_id(size_t id)
 void
 ServerBase::execute(std::shared_ptr<void> & dataIn)
 {
+  if (!dataIn) {
+    throw std::runtime_error("ServerBase::execute: give data pointer was null");
+  }
+
   std::shared_ptr<ServerBaseData> dataPtr = std::static_pointer_cast<ServerBaseData>(dataIn);
 
   std::visit(
