@@ -19,6 +19,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <deque>
 
 #include "rcl_action/action_server.h"
 #include "rcl_action/wait.h"
@@ -26,15 +27,42 @@
 #include "rcpputils/scope_exit.hpp"
 
 #include "action_msgs/msg/goal_status_array.hpp"
-#include "action_msgs/srv/cancel_goal.hpp"
 #include "rclcpp/exceptions.hpp"
 #include "rclcpp_action/server.hpp"
 
 using rclcpp_action::ServerBase;
 using rclcpp_action::GoalUUID;
 
+struct ServerBaseData;
+
 namespace rclcpp_action
 {
+
+struct ServerBaseData
+{
+  using GoalRequestData = std::tuple<rcl_ret_t, const rcl_action_goal_info_t, rmw_request_id_t,
+      std::shared_ptr<void>>;
+
+  using CancelRequestData = std::tuple<rcl_ret_t,
+      std::shared_ptr<action_msgs::srv::CancelGoal::Request>,
+      rmw_request_id_t>;
+
+  using ResultRequestData = std::tuple<rcl_ret_t, std::shared_ptr<void>, rmw_request_id_t>;
+
+  using GoalExpiredData = struct Empty {};
+
+  std::variant<GoalRequestData, CancelRequestData, ResultRequestData, GoalExpiredData> data;
+
+  explicit ServerBaseData(GoalRequestData && dataIn)
+  : data(std::move(dataIn)) {}
+  explicit ServerBaseData(CancelRequestData && dataIn)
+  : data(std::move(dataIn)) {}
+  explicit ServerBaseData(ResultRequestData && dataIn)
+  : data(std::move(dataIn)) {}
+  explicit ServerBaseData(GoalExpiredData && dataIn)
+  : data(std::move(dataIn)) {}
+};
+
 class ServerBaseImpl
 {
 public:
@@ -60,11 +88,6 @@ public:
   size_t num_services_ = 0;
   size_t num_guard_conditions_ = 0;
 
-  std::atomic<bool> goal_request_ready_{false};
-  std::atomic<bool> cancel_request_ready_{false};
-  std::atomic<bool> result_request_ready_{false};
-  std::atomic<bool> goal_expired_{false};
-
   // Lock for unordered_maps
   std::recursive_mutex unordered_map_mutex_;
 
@@ -75,9 +98,24 @@ public:
   // rcl goal handles are kept so api to send result doesn't try to access freed memory
   std::unordered_map<GoalUUID, std::shared_ptr<rcl_action_goal_handle_t>> goal_handles_;
 
+  // Lock for the data queue
+  std::recursive_mutex data_queue_mutex_;
+
+  // queue of data that still needs to be fetched via
+  // take_data for execution
+  std::deque<std::shared_ptr<ServerBaseData>> data_queue_;
+
+  // Lock for unreported events
+  std::recursive_mutex unreported_events_mutex_;
+
+  // number of events, that were not yet reported by is_ready
+  size_t num_unreported_events_ = 0;
+
   rclcpp::Logger logger_;
 };
+
 }  // namespace rclcpp_action
+
 
 ServerBase::ServerBase(
   rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node_base,
@@ -194,124 +232,216 @@ ServerBase::is_ready(rcl_wait_set_t * wait_set)
       &goal_expired);
   }
 
-  pimpl_->goal_request_ready_ = goal_request_ready;
-  pimpl_->cancel_request_ready_ = cancel_request_ready;
-  pimpl_->result_request_ready_ = result_request_ready;
-  pimpl_->goal_expired_ = goal_expired;
-
   if (RCL_RET_OK != ret) {
     rclcpp::exceptions::throw_from_rcl_error(ret);
   }
 
-  return pimpl_->goal_request_ready_.load() ||
-         pimpl_->cancel_request_ready_.load() ||
-         pimpl_->result_request_ready_.load() ||
-         pimpl_->goal_expired_.load();
-}
 
-std::shared_ptr<void>
-ServerBase::take_data()
-{
-  if (pimpl_->goal_request_ready_.load()) {
-    rcl_ret_t ret;
+  size_t cnt = 0;
+
+  if (goal_request_ready) {
+    cnt++;
     rcl_action_goal_info_t goal_info = rcl_action_get_zero_initialized_goal_info();
     rmw_request_id_t request_header;
+    std::shared_ptr<void> message;
+    {
+      std::lock_guard<std::recursive_mutex> lock(pimpl_->action_server_reentrant_mutex_);
 
-    std::lock_guard<std::recursive_mutex> lock(pimpl_->action_server_reentrant_mutex_);
+      message = create_goal_request();
+      ret = rcl_action_take_goal_request(
+        pimpl_->action_server_.get(),
+        &request_header,
+        message.get());
+    }
 
-    std::shared_ptr<void> message = create_goal_request();
-    ret = rcl_action_take_goal_request(
-      pimpl_->action_server_.get(),
-      &request_header,
-      message.get());
+    std::lock_guard<std::recursive_mutex> lock(pimpl_->data_queue_mutex_);
+    pimpl_->data_queue_.push_back(
+      std::make_shared<ServerBaseData>(
+        ServerBaseData::GoalRequestData(
+          ret, goal_info, request_header, message)));
+  }
 
-    return std::static_pointer_cast<void>(
-      std::make_shared
-      <std::tuple<rcl_ret_t, rcl_action_goal_info_t, rmw_request_id_t, std::shared_ptr<void>>>(
-        ret,
-        goal_info,
-        request_header, message));
-  } else if (pimpl_->cancel_request_ready_.load()) {
-    rcl_ret_t ret;
+  if (cancel_request_ready) {
+    cnt++;
     rmw_request_id_t request_header;
 
     // Initialize cancel request
     auto request = std::make_shared<action_msgs::srv::CancelGoal::Request>();
 
-    std::lock_guard<std::recursive_mutex> lock(pimpl_->action_server_reentrant_mutex_);
-    ret = rcl_action_take_cancel_request(
-      pimpl_->action_server_.get(),
-      &request_header,
-      request.get());
+    {
+      std::lock_guard<std::recursive_mutex> lock(pimpl_->action_server_reentrant_mutex_);
+      ret = rcl_action_take_cancel_request(
+        pimpl_->action_server_.get(),
+        &request_header,
+        request.get());
+    }
 
-    return std::static_pointer_cast<void>(
-      std::make_shared
-      <std::tuple<rcl_ret_t, std::shared_ptr<action_msgs::srv::CancelGoal::Request>,
-      rmw_request_id_t>>(ret, request, request_header));
-  } else if (pimpl_->result_request_ready_.load()) {
-    rcl_ret_t ret;
+    std::lock_guard<std::recursive_mutex> lock(pimpl_->data_queue_mutex_);
+    pimpl_->data_queue_.push_back(
+      std::make_shared<ServerBaseData>(
+        ServerBaseData::CancelRequestData(
+          ret, request,
+          request_header)));
+  }
+
+  if (result_request_ready) {
+    cnt++;
     // Get the result request message
     rmw_request_id_t request_header;
-    std::shared_ptr<void> result_request = create_result_request();
-    std::lock_guard<std::recursive_mutex> lock(pimpl_->action_server_reentrant_mutex_);
-    ret = rcl_action_take_result_request(
-      pimpl_->action_server_.get(), &request_header, result_request.get());
+    std::shared_ptr<void> result_request;
+    {
+      std::lock_guard<std::recursive_mutex> lock(pimpl_->action_server_reentrant_mutex_);
+      result_request = create_result_request();
+      ret = rcl_action_take_result_request(
+        pimpl_->action_server_.get(), &request_header, result_request.get());
+    }
 
-    return std::static_pointer_cast<void>(
-      std::make_shared<std::tuple<rcl_ret_t, std::shared_ptr<void>, rmw_request_id_t>>(
-        ret, result_request, request_header));
-  } else if (pimpl_->goal_expired_.load()) {
-    return nullptr;
-  } else {
-    throw std::runtime_error("Taking data from action server but nothing is ready");
+    std::lock_guard<std::recursive_mutex> lock(pimpl_->data_queue_mutex_);
+    pimpl_->data_queue_.push_back(
+      std::make_shared<ServerBaseData>(
+        ServerBaseData::ResultRequestData(
+          ret, result_request, request_header)));
   }
+
+  if (goal_expired) {
+    cnt++;
+    std::lock_guard<std::recursive_mutex> lock(pimpl_->data_queue_mutex_);
+    pimpl_->data_queue_.push_back(
+      std::make_shared<ServerBaseData>(ServerBaseData::GoalExpiredData()));
+  }
+
+  bool return_data_ready = false;
+
+  {
+    std::lock_guard<std::recursive_mutex> lock(pimpl_->unreported_events_mutex_);
+    pimpl_->num_unreported_events_ += cnt;
+
+    if (pimpl_->num_unreported_events_ > 0) {
+      pimpl_->num_unreported_events_--;
+      return_data_ready = true;
+    }
+  }
+
+  return return_data_ready;
+}
+
+std::shared_ptr<void>
+ServerBase::take_data()
+{
+  std::shared_ptr<void> ret;
+  {
+    std::lock_guard<std::recursive_mutex> lock(pimpl_->data_queue_mutex_);
+
+    if (pimpl_->data_queue_.empty()) {
+      throw std::runtime_error("Taking data from action server but nothing is ready");
+    }
+
+
+    ret = std::static_pointer_cast<void>(pimpl_->data_queue_.front());
+    pimpl_->data_queue_.pop_front();
+  }
+
+  return ret;
 }
 
 std::shared_ptr<void>
 ServerBase::take_data_by_entity_id(size_t id)
 {
+  std::shared_ptr<ServerBaseData> data_ptr;
   // Mark as ready the entity from which we want to take data
   switch (static_cast<EntityType>(id)) {
     case EntityType::GoalService:
-      pimpl_->goal_request_ready_ = true;
+      {
+        rcl_ret_t ret;
+        rcl_action_goal_info_t goal_info = rcl_action_get_zero_initialized_goal_info();
+        rmw_request_id_t request_header;
+
+        std::lock_guard<std::recursive_mutex> lock(pimpl_->action_server_reentrant_mutex_);
+
+        std::shared_ptr<void> message = create_goal_request();
+        ret = rcl_action_take_goal_request(
+          pimpl_->action_server_.get(),
+          &request_header,
+          message.get());
+
+        data_ptr = std::make_shared<ServerBaseData>(
+          ServerBaseData::GoalRequestData(
+            ret, goal_info, request_header, message));
+      }
       break;
     case EntityType::ResultService:
-      pimpl_->result_request_ready_ = true;
+      {
+        rcl_ret_t ret;
+        // Get the result request message
+        rmw_request_id_t request_header;
+        std::shared_ptr<void> result_request = create_result_request();
+        std::lock_guard<std::recursive_mutex> lock(pimpl_->action_server_reentrant_mutex_);
+        ret = rcl_action_take_result_request(
+          pimpl_->action_server_.get(), &request_header, result_request.get());
+
+        data_ptr =
+          std::make_shared<ServerBaseData>(
+          ServerBaseData::ResultRequestData(
+            ret, result_request, request_header));
+      }
       break;
     case EntityType::CancelService:
-      pimpl_->cancel_request_ready_ = true;
+      {
+        rcl_ret_t ret;
+        rmw_request_id_t request_header;
+
+        // Initialize cancel request
+        auto request = std::make_shared<action_msgs::srv::CancelGoal::Request>();
+
+        std::lock_guard<std::recursive_mutex> lock(pimpl_->action_server_reentrant_mutex_);
+        ret = rcl_action_take_cancel_request(
+          pimpl_->action_server_.get(),
+          &request_header,
+          request.get());
+
+        data_ptr =
+          std::make_shared<ServerBaseData>(
+          ServerBaseData::CancelRequestData(
+            ret, request,
+            request_header));
+      }
       break;
   }
 
-  return take_data();
+  return std::static_pointer_cast<void>(data_ptr);
 }
 
 void
-ServerBase::execute(std::shared_ptr<void> & data)
+ServerBase::execute(std::shared_ptr<void> & dataIn)
 {
-  if (!data && !pimpl_->goal_expired_.load()) {
-    throw std::runtime_error("'data' is empty");
-  }
+  std::shared_ptr<ServerBaseData> dataPtr = std::static_pointer_cast<ServerBaseData>(dataIn);
 
-  if (pimpl_->goal_request_ready_.load()) {
-    execute_goal_request_received(data);
-  } else if (pimpl_->cancel_request_ready_.load()) {
-    execute_cancel_request_received(data);
-  } else if (pimpl_->result_request_ready_.load()) {
-    execute_result_request_received(data);
-  } else if (pimpl_->goal_expired_.load()) {
-    execute_check_expired_goals();
-  } else {
-    throw std::runtime_error("Executing action server but nothing is ready");
-  }
+  std::visit(
+    [&](auto && data) -> void {
+      using T = std::decay_t<decltype(data)>;
+      if constexpr (std::is_same_v<T, ServerBaseData::GoalRequestData>) {
+        execute_goal_request_received(
+          std::get<0>(data), std::get<1>(data), std::get<2>(data),
+          std::get<3>(data));
+      }
+      if constexpr (std::is_same_v<T, ServerBaseData::CancelRequestData>) {
+        execute_cancel_request_received(std::get<0>(data), std::get<1>(data), std::get<2>(data));
+      }
+      if constexpr (std::is_same_v<T, ServerBaseData::ResultRequestData>) {
+        execute_result_request_received(std::get<0>(data), std::get<1>(data), std::get<2>(data));
+      }
+      if constexpr (std::is_same_v<T, ServerBaseData::GoalExpiredData>) {
+        execute_check_expired_goals();
+      }
+    },
+    dataPtr->data);
 }
 
 void
-ServerBase::execute_goal_request_received(std::shared_ptr<void> & data)
+ServerBase::execute_goal_request_received(
+  rcl_ret_t ret, rcl_action_goal_info_t goal_info, rmw_request_id_t request_header,
+  const std::shared_ptr<void> message)
 {
-  auto shared_ptr = std::static_pointer_cast
-    <std::tuple<rcl_ret_t, rcl_action_goal_info_t, rmw_request_id_t, std::shared_ptr<void>>>(data);
-  rcl_ret_t ret = std::get<0>(*shared_ptr);
   if (RCL_RET_ACTION_SERVER_TAKE_FAILED == ret) {
     // Ignore take failure because connext fails if it receives a sample without valid data.
     // This happens when a client shuts down and connext receives a sample saying the client is
@@ -319,14 +449,6 @@ ServerBase::execute_goal_request_received(std::shared_ptr<void> & data)
     return;
   } else if (RCL_RET_OK != ret) {
     rclcpp::exceptions::throw_from_rcl_error(ret);
-  }
-  rcl_action_goal_info_t goal_info = std::get<1>(*shared_ptr);
-  rmw_request_id_t request_header = std::get<2>(*shared_ptr);
-  std::shared_ptr<void> message = std::get<3>(*shared_ptr);
-
-  bool expected = true;
-  if (!pimpl_->goal_request_ready_.compare_exchange_strong(expected, false)) {
-    return;
   }
 
   GoalUUID uuid = get_goal_id_from_goal_request(message.get());
@@ -396,16 +518,13 @@ ServerBase::execute_goal_request_received(std::shared_ptr<void> & data)
     // Tell user to start executing action
     call_goal_accepted_callback(handle, uuid, message);
   }
-  data.reset();
 }
 
 void
-ServerBase::execute_cancel_request_received(std::shared_ptr<void> & data)
+ServerBase::execute_cancel_request_received(
+  rcl_ret_t ret, std::shared_ptr<action_msgs::srv::CancelGoal::Request> request,
+  rmw_request_id_t request_header)
 {
-  auto shared_ptr = std::static_pointer_cast
-    <std::tuple<rcl_ret_t, std::shared_ptr<action_msgs::srv::CancelGoal::Request>,
-      rmw_request_id_t>>(data);
-  auto ret = std::get<0>(*shared_ptr);
   if (RCL_RET_ACTION_SERVER_TAKE_FAILED == ret) {
     // Ignore take failure because connext fails if it receives a sample without valid data.
     // This happens when a client shuts down and connext receives a sample saying the client is
@@ -414,9 +533,6 @@ ServerBase::execute_cancel_request_received(std::shared_ptr<void> & data)
   } else if (RCL_RET_OK != ret) {
     rclcpp::exceptions::throw_from_rcl_error(ret);
   }
-  auto request = std::get<1>(*shared_ptr);
-  auto request_header = std::get<2>(*shared_ptr);
-  pimpl_->cancel_request_ready_ = false;
 
   // Convert c++ message to C message
   rcl_action_cancel_request_t cancel_request = rcl_action_get_zero_initialized_cancel_request();
@@ -486,15 +602,13 @@ ServerBase::execute_cancel_request_received(std::shared_ptr<void> & data)
   if (RCL_RET_OK != ret) {
     rclcpp::exceptions::throw_from_rcl_error(ret);
   }
-  data.reset();
 }
 
 void
-ServerBase::execute_result_request_received(std::shared_ptr<void> & data)
+ServerBase::execute_result_request_received(
+  rcl_ret_t ret, std::shared_ptr<void> result_request,
+  rmw_request_id_t request_header)
 {
-  auto shared_ptr = std::static_pointer_cast
-    <std::tuple<rcl_ret_t, std::shared_ptr<void>, rmw_request_id_t>>(data);
-  auto ret = std::get<0>(*shared_ptr);
   if (RCL_RET_ACTION_SERVER_TAKE_FAILED == ret) {
     // Ignore take failure because connext fails if it receives a sample without valid data.
     // This happens when a client shuts down and connext receives a sample saying the client is
@@ -503,10 +617,7 @@ ServerBase::execute_result_request_received(std::shared_ptr<void> & data)
   } else if (RCL_RET_OK != ret) {
     rclcpp::exceptions::throw_from_rcl_error(ret);
   }
-  auto result_request = std::get<1>(*shared_ptr);
-  auto request_header = std::get<2>(*shared_ptr);
 
-  pimpl_->result_request_ready_ = false;
   std::shared_ptr<void> result_response;
 
   // check if the goal exists
@@ -542,7 +653,6 @@ ServerBase::execute_result_request_received(std::shared_ptr<void> & data)
       rclcpp::exceptions::throw_from_rcl_error(rcl_ret);
     }
   }
-  data.reset();
 }
 
 void
