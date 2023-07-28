@@ -26,6 +26,7 @@
 #include "rcpputils/scope_exit.hpp"
 
 #include "action_msgs/msg/goal_status_array.hpp"
+#include "action_msgs/srv/cancel_goal.hpp"
 #include "rclcpp/exceptions.hpp"
 #include "rclcpp_action/server.hpp"
 
@@ -329,33 +330,46 @@ ServerBase::execute(std::shared_ptr<void> & dataIn)
 
   std::shared_ptr<ServerBaseData> dataPtr = std::static_pointer_cast<ServerBaseData>(dataIn);
 
+  std::shared_ptr<void> voidPtr;
+
   std::visit(
         [&](auto&& data) -> void {
             using T = std::decay_t<decltype(data)>;
             if constexpr (std::is_same_v<T, ServerBaseData::GoalRequestData>)
             {
-                execute_goal_request_received(std::get<0>(data), std::get<1>(data), std::get<2>(data), std::get<3>(data));
+              auto shared_ptr = std::make_shared<ServerBaseData::GoalRequestData>(data);
+              voidPtr = std::static_pointer_cast<void>(shared_ptr);
+              execute_goal_request_received(voidPtr);
             }
             if constexpr (std::is_same_v<T, ServerBaseData::CancelRequestData>)
             {
-                execute_cancel_request_received(std::get<0>(data), std::get<1>(data), std::get<2>(data));
+              auto shared_ptr = std::make_shared<ServerBaseData::CancelRequestData>(data);
+              voidPtr = std::static_pointer_cast<void>(shared_ptr);
+              execute_cancel_request_received(voidPtr);
             }
             if constexpr (std::is_same_v<T, ServerBaseData::ResultRequestData>)
             {
-                execute_result_request_received(std::get<0>(data), std::get<1>(data), std::get<2>(data));
+              auto shared_ptr = std::make_shared<ServerBaseData::ResultRequestData>(data);
+              voidPtr = std::static_pointer_cast<void>(shared_ptr);
+              execute_result_request_received(voidPtr);
             }
             if constexpr (std::is_same_v<T, ServerBaseData::GoalExpiredData>)
             {
-                execute_check_expired_goals();
+              execute_check_expired_goals();
             }
         },
         dataPtr->data);
 }
 
 void
-ServerBase::execute_goal_request_received(rcl_ret_t ret, rcl_action_goal_info_t goal_info,  rmw_request_id_t request_header,
-                                const std::shared_ptr<void> message)
+ServerBase::execute_goal_request_received(std::shared_ptr<void> & dataIn)
 {
+  auto shared_ptr = std::static_pointer_cast<ServerBaseData::GoalRequestData>(dataIn);
+  rcl_ret_t ret(std::get<0>(*shared_ptr));
+  rcl_action_goal_info_t goal_info(std::get<1>(*shared_ptr));
+  rmw_request_id_t request_header(std::get<2>(*shared_ptr));
+  const std::shared_ptr<void> message(std::get<3>(*shared_ptr));
+
   if (RCL_RET_ACTION_SERVER_TAKE_FAILED == ret) {
     // Ignore take failure because connext fails if it receives a sample without valid data.
     // This happens when a client shuts down and connext receives a sample saying the client is
@@ -435,9 +449,14 @@ ServerBase::execute_goal_request_received(rcl_ret_t ret, rcl_action_goal_info_t 
 }
 
 void
-ServerBase::execute_cancel_request_received(rcl_ret_t ret, std::shared_ptr<action_msgs::srv::CancelGoal::Request> request,
-      rmw_request_id_t request_header)
+ServerBase::execute_cancel_request_received(std::shared_ptr<void> &dataIn)
 {
+  auto shared_ptr = std::static_pointer_cast<ServerBaseData::CancelRequestData>(dataIn);
+
+  rcl_ret_t ret(std::get<0>(*shared_ptr));
+  std::shared_ptr<action_msgs::srv::CancelGoal::Request> request(std::get<1>(*shared_ptr));
+  rmw_request_id_t request_header(std::get<2>(*shared_ptr));
+
   if (RCL_RET_ACTION_SERVER_TAKE_FAILED == ret) {
     // Ignore take failure because connext fails if it receives a sample without valid data.
     // This happens when a client shuts down and connext receives a sample saying the client is
@@ -518,8 +537,14 @@ ServerBase::execute_cancel_request_received(rcl_ret_t ret, std::shared_ptr<actio
 }
 
 void
-ServerBase::execute_result_request_received(rcl_ret_t ret, std::shared_ptr<void> result_request, rmw_request_id_t request_header)
+ServerBase::execute_result_request_received(std::shared_ptr<void> &dataIn)
 {
+  auto shared_ptr = std::static_pointer_cast<ServerBaseData::ResultRequestData>(dataIn);
+
+  rcl_ret_t ret(std::get<0>(*shared_ptr));
+  std::shared_ptr<void> result_request(std::get<1>(*shared_ptr));
+  rmw_request_id_t request_header(std::get<2>(*shared_ptr));
+
   if (RCL_RET_ACTION_SERVER_TAKE_FAILED == ret) {
     // Ignore take failure because connext fails if it receives a sample without valid data.
     // This happens when a client shuts down and connext receives a sample saying the client is
