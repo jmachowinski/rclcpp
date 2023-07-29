@@ -676,20 +676,34 @@ ClientBase::execute(std::shared_ptr<void> & dataIn)
 
   std::shared_ptr<ClientBaseData> dataPtr = std::static_pointer_cast<ClientBaseData>(dataIn);
 
+  if(!dataPtr)
+  {
+    throw std::runtime_error("'dataPtr' is empty");
+  }
+
+  RCLCPP_ERROR_STREAM(pimpl_->logger," Execute !");
 
   std::visit(
     [&](auto&& data) -> void {
       using T = std::decay_t<decltype(data)>;
       if constexpr (std::is_same_v<T, ClientBaseData::FeedbackReadyData>)
       {
+
+        RCLCPP_ERROR_STREAM(pimpl_->logger," got feedback");
+
         if (RCL_RET_OK == data.ret) {
+          RCLCPP_ERROR_STREAM(pimpl_->logger," ret is okay msg ptr is " << data.feedback_message.get());
+
           this->handle_feedback_message(data.feedback_message);
+          RCLCPP_ERROR_STREAM(pimpl_->logger," handled feedback");
         } else if (RCL_RET_ACTION_CLIENT_TAKE_FAILED != data.ret) {
+          RCLCPP_ERROR_STREAM(pimpl_->logger," ret is NOT okay");
           rclcpp::exceptions::throw_from_rcl_error(data.ret, "error taking feedback");
         }
       }
       if constexpr (std::is_same_v<T, ClientBaseData::StatusReadyData>)
       {
+        RCLCPP_ERROR_STREAM(pimpl_->logger," got status data");
         if (RCL_RET_OK == data.ret) {
           this->handle_status_message(data.status_message);
         } else if (RCL_RET_ACTION_CLIENT_TAKE_FAILED != data.ret) {
@@ -698,6 +712,7 @@ ClientBase::execute(std::shared_ptr<void> & dataIn)
       }
       if constexpr (std::is_same_v<T, ClientBaseData::GoalResponseData>)
       {
+        RCLCPP_ERROR_STREAM(pimpl_->logger," got goal response");
         if (RCL_RET_OK == data.ret) {
           this->handle_goal_response(data.response_header, data.goal_response);
         } else if (RCL_RET_ACTION_CLIENT_TAKE_FAILED != data.ret) {
@@ -706,6 +721,7 @@ ClientBase::execute(std::shared_ptr<void> & dataIn)
       }
       if constexpr (std::is_same_v<T, ClientBaseData::ResultResponseData>)
       {
+        RCLCPP_ERROR_STREAM(pimpl_->logger," got result response");
         if (RCL_RET_OK == data.ret) {
           this->handle_result_response(data.response_header, data.result_response);
         } else if (RCL_RET_ACTION_CLIENT_TAKE_FAILED != data.ret) {
@@ -714,6 +730,7 @@ ClientBase::execute(std::shared_ptr<void> & dataIn)
       }
       if constexpr (std::is_same_v<T, ClientBaseData::CancelResponseData>)
       {
+        RCLCPP_ERROR_STREAM(pimpl_->logger," got cancel response");
         if (RCL_RET_OK == data.ret) {
           this->handle_cancel_response(data.response_header, data.cancel_response);
         } else if (RCL_RET_ACTION_CLIENT_TAKE_FAILED != data.ret) {
@@ -721,6 +738,9 @@ ClientBase::execute(std::shared_ptr<void> & dataIn)
         }
       }
     }, dataPtr->data);
+
+    RCLCPP_ERROR_STREAM(pimpl_->logger,"execute done");
+
 }
 
 }  // namespace rclcpp_action

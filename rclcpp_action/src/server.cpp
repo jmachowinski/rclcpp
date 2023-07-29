@@ -231,10 +231,21 @@ ServerBase::is_ready(rcl_wait_set_t * wait_set)
     rclcpp::exceptions::throw_from_rcl_error(ret);
   }
 
-  return pimpl_->goal_request_ready_.load() ||
-         pimpl_->cancel_request_ready_.load() ||
-         pimpl_->result_request_ready_.load() ||
-         pimpl_->goal_expired_.load();
+
+
+  bool isReady = pimpl_->goal_request_ready_.load() ||
+             pimpl_->cancel_request_ready_.load() ||
+             pimpl_->result_request_ready_.load() ||
+             pimpl_->goal_expired_.load();
+
+  if(!isReady)
+  {
+    if(!pimpl_->threadExlusive.exchange(false))
+    {
+      throw std::runtime_error("ServerBase::Internal error, is_ready reentrant called");
+    }
+  }
+  return isReady;
 }
 
 std::shared_ptr<void>
@@ -305,6 +316,11 @@ std::make_shared<ServerBaseData>(ServerBaseData::CancelRequestData(ret, request,
 std::shared_ptr<void>
 ServerBase::take_data_by_entity_id(size_t id)
 {
+  if(pimpl_->threadExlusive.exchange(true))
+  {
+    throw std::runtime_error("ServerBase::Internal error, is_ready called, before take_data was called");
+  }
+
   // Mark as ready the entity from which we want to take data
   switch (static_cast<EntityType>(id)) {
     case EntityType::GoalService:
