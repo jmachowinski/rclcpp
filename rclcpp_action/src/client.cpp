@@ -600,16 +600,16 @@ ClientBase::take_data()
     rcl_ret_t ret = rcl_action_take_feedback(
       pimpl_->client_handle.get(), feedback_message.get());
     return std::static_pointer_cast<void>(
-      std::make_shared<ClientBaseData::FeedbackReadyData>(
-        ret, feedback_message));
+      std::make_shared<ClientBaseData>(ClientBaseData::FeedbackReadyData(
+        ret, feedback_message)));
   } else if (pimpl_->is_status_ready) {
     pimpl_->is_status_ready = false;
     std::shared_ptr<void> status_message = this->create_status_message();
     rcl_ret_t ret = rcl_action_take_status(
       pimpl_->client_handle.get(), status_message.get());
     return std::static_pointer_cast<void>(
-      std::make_shared<ClientBaseData::StatusReadyData>(
-        ret, status_message));
+      std::make_shared<ClientBaseData>(ClientBaseData::StatusReadyData(
+        ret, status_message)));
   } else if (pimpl_->is_goal_response_ready) {
     pimpl_->is_goal_response_ready = false;
     rmw_request_id_t response_header;
@@ -617,8 +617,8 @@ ClientBase::take_data()
     rcl_ret_t ret = rcl_action_take_goal_response(
       pimpl_->client_handle.get(), &response_header, goal_response.get());
     return std::static_pointer_cast<void>(
-      std::make_shared<ClientBaseData::GoalResponseData>(
-        ret, response_header, goal_response));
+      std::make_shared<ClientBaseData>(ClientBaseData::GoalResponseData(
+        ret, response_header, goal_response)));
   } else if (pimpl_->is_result_response_ready) {
     pimpl_->is_result_response_ready = false;
     rmw_request_id_t response_header;
@@ -626,8 +626,8 @@ ClientBase::take_data()
     rcl_ret_t ret = rcl_action_take_result_response(
       pimpl_->client_handle.get(), &response_header, result_response.get());
     return std::static_pointer_cast<void>(
-      std::make_shared<ClientBaseData::ResultResponseData>(
-        ret, response_header, result_response));
+      std::make_shared<ClientBaseData>(ClientBaseData::ResultResponseData(
+        ret, response_header, result_response)));
   } else if (pimpl_->is_cancel_response_ready) {
     pimpl_->is_cancel_response_ready = false;
     rmw_request_id_t response_header;
@@ -635,8 +635,8 @@ ClientBase::take_data()
     rcl_ret_t ret = rcl_action_take_cancel_response(
       pimpl_->client_handle.get(), &response_header, cancel_response.get());
     return std::static_pointer_cast<void>(
-      std::make_shared<ClientBaseData::CancelResponseData>(
-        ret, response_header, cancel_response));
+      std::make_shared<ClientBaseData>(ClientBaseData::CancelResponseData(
+        ret, response_header, cancel_response)));
   } else {
     throw std::runtime_error("Taking data from action client but nothing is ready");
   }
