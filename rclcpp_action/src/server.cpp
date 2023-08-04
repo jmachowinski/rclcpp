@@ -105,12 +105,6 @@ public:
   // take_data for execution
   std::deque<std::shared_ptr<ServerBaseData>> data_queue_;
 
-  // Lock for unreported events
-  std::recursive_mutex unreported_events_mutex_;
-
-  // number of events, that were not yet reported by is_ready
-  size_t num_unreported_events_ = 0;
-
   rclcpp::Logger logger_;
 };
 
@@ -236,11 +230,7 @@ ServerBase::is_ready(rcl_wait_set_t * wait_set)
     rclcpp::exceptions::throw_from_rcl_error(ret);
   }
 
-
-  size_t cnt = 0;
-
   if (goal_request_ready) {
-    cnt++;
     rcl_action_goal_info_t goal_info = rcl_action_get_zero_initialized_goal_info();
     rmw_request_id_t request_header;
     std::shared_ptr<void> message;
@@ -259,10 +249,11 @@ ServerBase::is_ready(rcl_wait_set_t * wait_set)
       std::make_shared<ServerBaseData>(
         ServerBaseData::GoalRequestData(
           ret, goal_info, request_header, message)));
+
+    return true;
   }
 
   if (cancel_request_ready) {
-    cnt++;
     rmw_request_id_t request_header;
 
     // Initialize cancel request
@@ -282,10 +273,11 @@ ServerBase::is_ready(rcl_wait_set_t * wait_set)
         ServerBaseData::CancelRequestData(
           ret, request,
           request_header)));
+
+    return true;
   }
 
   if (result_request_ready) {
-    cnt++;
     // Get the result request message
     rmw_request_id_t request_header;
     std::shared_ptr<void> result_request;
@@ -301,28 +293,19 @@ ServerBase::is_ready(rcl_wait_set_t * wait_set)
       std::make_shared<ServerBaseData>(
         ServerBaseData::ResultRequestData(
           ret, result_request, request_header)));
+
+    return true;
   }
 
   if (goal_expired) {
-    cnt++;
     std::lock_guard<std::recursive_mutex> lock(pimpl_->data_queue_mutex_);
     pimpl_->data_queue_.push_back(
       std::make_shared<ServerBaseData>(ServerBaseData::GoalExpiredData()));
+
+    return true;
   }
 
-  bool return_data_ready = false;
-
-  {
-    std::lock_guard<std::recursive_mutex> lock(pimpl_->unreported_events_mutex_);
-    pimpl_->num_unreported_events_ += cnt;
-
-    if (pimpl_->num_unreported_events_ > 0) {
-      pimpl_->num_unreported_events_--;
-      return_data_ready = true;
-    }
-  }
-
-  return return_data_ready;
+  return false;
 }
 
 std::shared_ptr<void>

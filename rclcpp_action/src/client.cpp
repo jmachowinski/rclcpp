@@ -159,12 +159,6 @@ public:
   // take_data for execution
   std::deque<std::shared_ptr<ClientBaseData>> data_queue_;
 
-  // Lock for unreported events
-  std::recursive_mutex unreported_events_mutex_;
-
-  // number of events, that were not yet reported by is_ready
-  size_t num_unreported_events_ = 0;
-
   // Lock for action_client_
   std::recursive_mutex action_client_mutex_;
 
@@ -358,9 +352,7 @@ ClientBase::is_ready(rcl_wait_set_t * wait_set)
     }
   }
 
-  size_t cnt = 0;
   if (is_feedback_ready) {
-    cnt++;
     std::shared_ptr<void> feedback_message;
     {
       std::lock_guard<std::recursive_mutex> lock(pimpl_->action_client_mutex_);
@@ -374,10 +366,11 @@ ClientBase::is_ready(rcl_wait_set_t * wait_set)
       std::make_shared<ClientBaseData>(
         ClientBaseData::FeedbackReadyData(
           ret, feedback_message)));
+
+    return true;
   }
 
   if (is_status_ready) {
-    cnt++;
     std::shared_ptr<void> status_message;
     {
       std::lock_guard<std::recursive_mutex> lock(pimpl_->action_client_mutex_);
@@ -391,10 +384,11 @@ ClientBase::is_ready(rcl_wait_set_t * wait_set)
       std::make_shared<ClientBaseData>(
         ClientBaseData::StatusReadyData(
           ret, status_message)));
+
+    return true;
   }
 
   if (is_goal_response_ready) {
-    cnt++;
     rmw_request_id_t response_header;
     std::shared_ptr<void> goal_response;
     {
@@ -404,15 +398,17 @@ ClientBase::is_ready(rcl_wait_set_t * wait_set)
       ret = rcl_action_take_goal_response(
         pimpl_->client_handle.get(), &response_header, goal_response.get());
     }
+
     std::lock_guard<std::recursive_mutex> lock(pimpl_->data_queue_mutex_);
     pimpl_->data_queue_.push_back(
       std::make_shared<ClientBaseData>(
         ClientBaseData::GoalResponseData(
           ret, response_header, goal_response)));
+
+    return true;
   }
 
   if (is_result_response_ready) {
-    cnt++;
     rmw_request_id_t response_header;
     std::shared_ptr<void> result_response;
     {
@@ -421,15 +417,17 @@ ClientBase::is_ready(rcl_wait_set_t * wait_set)
       ret = rcl_action_take_result_response(
         pimpl_->client_handle.get(), &response_header, result_response.get());
     }
+
     std::lock_guard<std::recursive_mutex> lock(pimpl_->data_queue_mutex_);
     pimpl_->data_queue_.push_back(
       std::make_shared<ClientBaseData>(
         ClientBaseData::ResultResponseData(
           ret, response_header, result_response)));
+
+    return true;
   }
 
   if (is_cancel_response_ready) {
-    cnt++;
     rmw_request_id_t response_header;
     std::shared_ptr<void> cancel_response;
     {
@@ -444,21 +442,10 @@ ClientBase::is_ready(rcl_wait_set_t * wait_set)
       std::make_shared<ClientBaseData>(
         ClientBaseData::CancelResponseData(
           ret, response_header, cancel_response)));
+    return true;
   }
 
-  bool return_data_ready = false;
-
-  {
-    std::lock_guard<std::recursive_mutex> lock(pimpl_->unreported_events_mutex_);
-    pimpl_->num_unreported_events_ += cnt;
-
-    if (pimpl_->num_unreported_events_ > 0) {
-      pimpl_->num_unreported_events_--;
-      return_data_ready = true;
-    }
-  }
-
-  return return_data_ready;
+  return false;
 }
 
 void
