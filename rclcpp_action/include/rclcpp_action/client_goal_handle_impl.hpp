@@ -28,17 +28,23 @@ namespace rclcpp_action
 
 template<typename ActionT>
 ClientGoalHandle<ActionT>::ClientGoalHandle(
+  const typename Client<ActionT>::SharedPtr & client,
   const GoalInfo & info, FeedbackCallback feedback_callback, ResultCallback result_callback)
 : info_(info),
   result_future_(result_promise_.get_future()),
   feedback_callback_(feedback_callback),
-  result_callback_(result_callback)
+  result_callback_(result_callback),
+  client_weak_ptr_(client)
 {
 }
 
 template<typename ActionT>
 ClientGoalHandle<ActionT>::~ClientGoalHandle()
 {
+  typename Client<ActionT>::SharedPtr client = client_weak_ptr_.lock();
+  if (client) {
+    client->drop_goal_handle(get_goal_id());
+  }
 }
 
 template<typename ActionT>

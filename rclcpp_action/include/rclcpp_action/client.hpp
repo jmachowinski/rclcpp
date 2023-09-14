@@ -333,7 +333,7 @@ private:
  *  - calling user callbacks.
  */
 template<typename ActionT>
-class Client : public ClientBase
+class Client : public ClientBase, public std::enable_shared_from_this<Client<ActionT>>
 {
 public:
   RCLCPP_SMART_PTR_DEFINITIONS_NOT_COPYABLE(Client<ActionT>)
@@ -446,7 +446,9 @@ public:
         goal_info.stamp = goal_response->stamp;
         // Do not use std::make_shared as friendship cannot be forwarded.
         std::shared_ptr<GoalHandle> goal_handle(
-          new GoalHandle(goal_info, options.feedback_callback, options.result_callback));
+          new GoalHandle(
+            this->shared_from_this(), goal_info, options.feedback_callback,
+            options.result_callback));
         {
           std::lock_guard<std::mutex> guard(goal_handles_mutex_);
           goal_handles_[goal_handle->get_goal_id()] = goal_handle;
@@ -564,8 +566,12 @@ public:
 
   void drop_goal_handle(typename GoalHandle::SharedPtr goal_handle)
   {
+    drop_goal_handle(goal_handle->get_goal_id());
+  }
+
+  void drop_goal_handle(const GoalUUID & goal_id)
+  {
     std::lock_guard<std::mutex> guard(goal_handles_mutex_);
-    const GoalUUID & goal_id = goal_handle->get_goal_id();
     if (goal_handles_.count(goal_id) == 0) {
       // someone else already deleted the entry
       // e.g. the result callback

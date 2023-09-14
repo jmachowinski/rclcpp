@@ -107,6 +107,7 @@ private:
   friend class Client<ActionT>;
 
   ClientGoalHandle(
+    const typename Client<ActionT>::SharedPtr & client,
     const GoalInfo & info,
     FeedbackCallback feedback_callback,
     ResultCallback result_callback);
@@ -162,6 +163,8 @@ private:
   FeedbackCallback feedback_callback_{nullptr};
   ResultCallback result_callback_{nullptr};
   int8_t status_{GoalStatus::STATUS_ACCEPTED};
+
+  typename std::weak_ptr<Client<ActionT>> client_weak_ptr_;
 
   std::mutex handle_mutex_;
 };
