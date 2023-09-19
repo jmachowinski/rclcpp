@@ -20,6 +20,7 @@
 #include <string>
 #include <tuple>
 #include <utility>
+#include <variant>
 
 #include "rcl_action/action_client.h"
 #include "rcl_action/wait.h"
