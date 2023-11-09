@@ -33,7 +33,6 @@
 namespace rclcpp_action
 {
 
-
 struct ClientBaseData
 {
   struct FeedbackReadyData
@@ -75,19 +74,24 @@ struct ClientBaseData
     std::shared_ptr<void> result_response;
   };
 
-  std::variant<FeedbackReadyData, StatusReadyData, GoalResponseData, CancelResponseData,
-    ResultResponseData> data;
+  std::variant<
+    FeedbackReadyData,
+    StatusReadyData,
+    GoalResponseData,
+    CancelResponseData,
+    ResultResponseData
+  > data;
 
-  explicit ClientBaseData(FeedbackReadyData && dataIn)
-  : data(std::move(dataIn)) {}
-  explicit ClientBaseData(StatusReadyData && dataIn)
-  : data(std::move(dataIn)) {}
-  explicit ClientBaseData(GoalResponseData && dataIn)
-  : data(std::move(dataIn)) {}
-  explicit ClientBaseData(CancelResponseData && dataIn)
-  : data(std::move(dataIn)) {}
-  explicit ClientBaseData(ResultResponseData && dataIn)
-  : data(std::move(dataIn)) {}
+  explicit ClientBaseData(FeedbackReadyData && data_in)
+  : data(std::move(data_in)) {}
+  explicit ClientBaseData(StatusReadyData && data_in)
+  : data(std::move(data_in)) {}
+  explicit ClientBaseData(GoalResponseData && data_in)
+  : data(std::move(data_in)) {}
+  explicit ClientBaseData(CancelResponseData && data_in)
+  : data(std::move(data_in)) {}
+  explicit ClientBaseData(ResultResponseData && data_in)
+  : data(std::move(data_in)) {}
 };
 
 class ClientBaseImpl
@@ -184,7 +188,6 @@ public:
   std::independent_bits_engine<
     std::default_random_engine, 8, unsigned int> random_bytes_generator;
 };
-
 
 ClientBase::ClientBase(
   rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node_base,
@@ -597,7 +600,6 @@ ClientBase::set_callback_to_entity(
       }
     };
 
-
   // Set it temporarily to the new callback, while we replace the old one.
   // This two-step setting, prevents a gap where the old std::function has
   // been replaced but the middleware hasn't been told about the new one yet.
@@ -723,7 +725,6 @@ ClientBase::take_data()
       throw std::runtime_error("Taking data from action server but nothing is ready");
     }
 
-
     ret = std::static_pointer_cast<void>(pimpl_->data_queue_.front());
     pimpl_->data_queue_.pop_front();
   }
@@ -823,14 +824,13 @@ ClientBase::take_data_by_entity_id(size_t id)
 }
 
 void
-ClientBase::execute(std::shared_ptr<void> & dataIn)
+ClientBase::execute(std::shared_ptr<void> & data_in)
 {
-  if (!dataIn) {
-    throw std::runtime_error("'data' is empty");
+  if (!data_in) {
+    throw std::invalid_argument("'data_in' is unexpectedly empty");
   }
 
-  std::shared_ptr<ClientBaseData> dataPtr = std::static_pointer_cast<ClientBaseData>(dataIn);
-
+  std::shared_ptr<ClientBaseData> data_ptr = std::static_pointer_cast<ClientBaseData>(data_in);
 
   std::visit(
     [&](auto && data) -> void {
@@ -870,7 +870,7 @@ ClientBase::execute(std::shared_ptr<void> & dataIn)
           rclcpp::exceptions::throw_from_rcl_error(data.ret, "error taking cancel response");
         }
       }
-    }, dataPtr->data);
+    }, data_ptr->data);
 }
 
 }  // namespace rclcpp_action
