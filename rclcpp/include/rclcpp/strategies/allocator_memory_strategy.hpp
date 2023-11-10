@@ -120,9 +120,11 @@ public:
         timer_handles_[i].reset();
       }
     }
+    waitable_triggered_handles_.clear();
+    waitable_triggered_handles_.reserve(waitable_handles_.size());
     for (size_t i = 0; i < waitable_handles_.size(); ++i) {
       if (waitable_handles_[i]->is_ready(wait_set)) {
-        waitable_triggered_handles_.emplace_back(std::move(waitable_handles_[i]));
+        waitable_triggered_handles_.push_back(std::move(waitable_handles_[i]));
       }
     }
 
