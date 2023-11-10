@@ -157,15 +157,11 @@ public:
   size_t num_clients{0u};
   size_t num_services{0u};
 
-  // Lock for the data queue
-  std::recursive_mutex data_queue_mutex_;
-
-  // queue of data that still needs to be fetched via
-  // take_data for execution
-  std::deque<std::shared_ptr<ClientBaseData>> data_queue_;
-
   // Lock for action_client_
   std::recursive_mutex action_client_mutex_;
+
+  // next ready event for taking, will be set by is_ready and will be processed by take_data
+  std::atomic<size_t> next_ready_event;
 
   rclcpp::Context::SharedPtr context_;
   rclcpp::node_interfaces::NodeGraphInterface::WeakPtr node_graph_;
@@ -356,96 +352,30 @@ ClientBase::is_ready(rcl_wait_set_t * wait_set)
     }
   }
 
+  pimpl_->next_ready_event = std::numeric_limits<size_t>::max();
+
   if (is_feedback_ready) {
-    std::shared_ptr<void> feedback_message;
-    {
-      std::lock_guard<std::recursive_mutex> lock(pimpl_->action_client_mutex_);
-      feedback_message = this->create_feedback_message();
-      ret = rcl_action_take_feedback(
-        pimpl_->client_handle.get(), feedback_message.get());
-    }
-
-    std::lock_guard<std::recursive_mutex> lock(pimpl_->data_queue_mutex_);
-    pimpl_->data_queue_.push_back(
-      std::make_shared<ClientBaseData>(
-        ClientBaseData::FeedbackReadyData(
-          ret, feedback_message)));
-
+    pimpl_->next_ready_event = static_cast<size_t>(EntityType::FeedbackSubscription);
     return true;
   }
 
   if (is_status_ready) {
-    std::shared_ptr<void> status_message;
-    {
-      std::lock_guard<std::recursive_mutex> lock(pimpl_->action_client_mutex_);
-      status_message = this->create_status_message();
-      ret = rcl_action_take_status(
-        pimpl_->client_handle.get(), status_message.get());
-    }
-
-    std::lock_guard<std::recursive_mutex> lock(pimpl_->data_queue_mutex_);
-    pimpl_->data_queue_.push_back(
-      std::make_shared<ClientBaseData>(
-        ClientBaseData::StatusReadyData(
-          ret, status_message)));
-
+    pimpl_->next_ready_event = static_cast<size_t>(EntityType::StatusSubscription);
     return true;
   }
 
   if (is_goal_response_ready) {
-    rmw_request_id_t response_header;
-    std::shared_ptr<void> goal_response;
-    {
-      std::lock_guard<std::recursive_mutex> lock(pimpl_->action_client_mutex_);
-
-      goal_response = this->create_goal_response();
-      ret = rcl_action_take_goal_response(
-        pimpl_->client_handle.get(), &response_header, goal_response.get());
-    }
-
-    std::lock_guard<std::recursive_mutex> lock(pimpl_->data_queue_mutex_);
-    pimpl_->data_queue_.push_back(
-      std::make_shared<ClientBaseData>(
-        ClientBaseData::GoalResponseData(
-          ret, response_header, goal_response)));
-
+    pimpl_->next_ready_event = static_cast<size_t>(EntityType::GoalClient);
     return true;
   }
 
   if (is_result_response_ready) {
-    rmw_request_id_t response_header;
-    std::shared_ptr<void> result_response;
-    {
-      std::lock_guard<std::recursive_mutex> lock(pimpl_->action_client_mutex_);
-      result_response = this->create_result_response();
-      ret = rcl_action_take_result_response(
-        pimpl_->client_handle.get(), &response_header, result_response.get());
-    }
-
-    std::lock_guard<std::recursive_mutex> lock(pimpl_->data_queue_mutex_);
-    pimpl_->data_queue_.push_back(
-      std::make_shared<ClientBaseData>(
-        ClientBaseData::ResultResponseData(
-          ret, response_header, result_response)));
-
+    pimpl_->next_ready_event = static_cast<size_t>(EntityType::ResultClient);
     return true;
   }
 
   if (is_cancel_response_ready) {
-    rmw_request_id_t response_header;
-    std::shared_ptr<void> cancel_response;
-    {
-      std::lock_guard<std::recursive_mutex> lock(pimpl_->action_client_mutex_);
-      cancel_response = this->create_cancel_response();
-      ret = rcl_action_take_cancel_response(
-        pimpl_->client_handle.get(), &response_header, cancel_response.get());
-    }
-
-    std::lock_guard<std::recursive_mutex> lock(pimpl_->data_queue_mutex_);
-    pimpl_->data_queue_.push_back(
-      std::make_shared<ClientBaseData>(
-        ClientBaseData::CancelResponseData(
-          ret, response_header, cancel_response)));
+    pimpl_->next_ready_event = static_cast<size_t>(EntityType::CancelClient);
     return true;
   }
 
@@ -717,19 +647,15 @@ ClientBase::clear_on_ready_callback()
 std::shared_ptr<void>
 ClientBase::take_data()
 {
-  std::shared_ptr<void> ret;
-  {
-    std::lock_guard<std::recursive_mutex> lock(pimpl_->data_queue_mutex_);
+  //next_ready_event is an atomics, caching localy
+  size_t next_ready_event = pimpl_->next_ready_event;
 
-    if (pimpl_->data_queue_.empty()) {
-      throw std::runtime_error("Taking data from action server but nothing is ready");
-    }
-
-    ret = std::static_pointer_cast<void>(pimpl_->data_queue_.front());
-    pimpl_->data_queue_.pop_front();
+  if (next_ready_event == std::numeric_limits<uint32_t>::max()) {
+    throw std::runtime_error("Taking data from action server but nothing is ready");
   }
+  pimpl_->next_ready_event = std::numeric_limits<uint32_t>::max();
 
-  return ret;
+  return take_data_by_entity_id(next_ready_event);
 }
 
 std::shared_ptr<void>

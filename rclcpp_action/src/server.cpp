@@ -99,12 +99,8 @@ public:
   // rcl goal handles are kept so api to send result doesn't try to access freed memory
   std::unordered_map<GoalUUID, std::shared_ptr<rcl_action_goal_handle_t>> goal_handles_;
 
-  // Lock for the data queue
-  std::recursive_mutex data_queue_mutex_;
-
-  // queue of data that still needs to be fetched via
-  // take_data for execution
-  std::deque<std::shared_ptr<ServerBaseData>> data_queue_;
+  // next ready event for taking, will be set by is_ready and will be processed by take_data
+  std::atomic<size_t> next_ready_event;
 
   rclcpp::Logger logger_;
 };
@@ -231,78 +227,25 @@ ServerBase::is_ready(rcl_wait_set_t * wait_set)
     rclcpp::exceptions::throw_from_rcl_error(ret);
   }
 
+  pimpl_->next_ready_event = std::numeric_limits<uint32_t>::max();
+
   if (goal_request_ready) {
-    rcl_action_goal_info_t goal_info = rcl_action_get_zero_initialized_goal_info();
-    rmw_request_id_t request_header;
-    std::shared_ptr<void> message;
-    {
-      std::lock_guard<std::recursive_mutex> lock(pimpl_->action_server_reentrant_mutex_);
-
-      message = create_goal_request();
-      ret = rcl_action_take_goal_request(
-        pimpl_->action_server_.get(),
-        &request_header,
-        message.get());
-    }
-
-    std::lock_guard<std::recursive_mutex> lock(pimpl_->data_queue_mutex_);
-    pimpl_->data_queue_.push_back(
-      std::make_shared<ServerBaseData>(
-        ServerBaseData::GoalRequestData(
-          ret, goal_info, request_header, message)));
-
+    pimpl_->next_ready_event = static_cast<uint32_t>(EntityType::GoalService);
     return true;
   }
 
   if (cancel_request_ready) {
-    rmw_request_id_t request_header;
-
-    // Initialize cancel request
-    auto request = std::make_shared<action_msgs::srv::CancelGoal::Request>();
-
-    {
-      std::lock_guard<std::recursive_mutex> lock(pimpl_->action_server_reentrant_mutex_);
-      ret = rcl_action_take_cancel_request(
-        pimpl_->action_server_.get(),
-        &request_header,
-        request.get());
-    }
-
-    std::lock_guard<std::recursive_mutex> lock(pimpl_->data_queue_mutex_);
-    pimpl_->data_queue_.push_back(
-      std::make_shared<ServerBaseData>(
-        ServerBaseData::CancelRequestData(
-          ret, request,
-          request_header)));
-
+    pimpl_->next_ready_event = static_cast<uint32_t>(EntityType::CancelService);
     return true;
   }
 
   if (result_request_ready) {
-    // Get the result request message
-    rmw_request_id_t request_header;
-    std::shared_ptr<void> result_request;
-    {
-      std::lock_guard<std::recursive_mutex> lock(pimpl_->action_server_reentrant_mutex_);
-      result_request = create_result_request();
-      ret = rcl_action_take_result_request(
-        pimpl_->action_server_.get(), &request_header, result_request.get());
-    }
-
-    std::lock_guard<std::recursive_mutex> lock(pimpl_->data_queue_mutex_);
-    pimpl_->data_queue_.push_back(
-      std::make_shared<ServerBaseData>(
-        ServerBaseData::ResultRequestData(
-          ret, result_request, request_header)));
-
+    pimpl_->next_ready_event = static_cast<uint32_t>(EntityType::ResultService);
     return true;
   }
 
   if (goal_expired) {
-    std::lock_guard<std::recursive_mutex> lock(pimpl_->data_queue_mutex_);
-    pimpl_->data_queue_.push_back(
-      std::make_shared<ServerBaseData>(ServerBaseData::GoalExpiredData()));
-
+    pimpl_->next_ready_event = static_cast<uint32_t>(EntityType::Expired);
     return true;
   }
 
@@ -312,20 +255,15 @@ ServerBase::is_ready(rcl_wait_set_t * wait_set)
 std::shared_ptr<void>
 ServerBase::take_data()
 {
-  std::shared_ptr<void> ret;
-  {
-    std::lock_guard<std::recursive_mutex> lock(pimpl_->data_queue_mutex_);
+  size_t next_ready_event = pimpl_->next_ready_event;
 
-    if (pimpl_->data_queue_.empty()) {
-      throw std::runtime_error("Taking data from action server but nothing is ready");
-    }
-
-
-    ret = std::static_pointer_cast<void>(pimpl_->data_queue_.front());
-    pimpl_->data_queue_.pop_front();
+  if (next_ready_event == std::numeric_limits<uint32_t>::max()) {
+    throw std::runtime_error("ServerBase::take_data() called but no data is ready");
   }
 
-  return ret;
+  pimpl_->next_ready_event = std::numeric_limits<uint32_t>::max();
+
+  return take_data_by_entity_id(next_ready_event);
 }
 
 std::shared_ptr<void>
@@ -388,6 +326,12 @@ ServerBase::take_data_by_entity_id(size_t id)
           ServerBaseData::CancelRequestData(
             ret, request,
             request_header));
+      }
+      break;
+    case EntityType::Expired:
+      {
+        data_ptr =
+          std::make_shared<ServerBaseData>(ServerBaseData::GoalExpiredData());
       }
       break;
   }

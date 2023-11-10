@@ -78,6 +78,7 @@ public:
     GoalService,
     ResultService,
     CancelService,
+    Expired,
   };
 
   RCLCPP_ACTION_PUBLIC
