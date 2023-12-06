@@ -52,6 +52,12 @@ MultiThreadedExecutor::~MultiThreadedExecutor() {}
 void
 MultiThreadedExecutor::spin()
 {
+  spin(std::function<void(const std::exception &)>());
+}
+
+void
+MultiThreadedExecutor::spin(std::function<void(const std::exception &)> exception_handler)
+{
   if (spinning.exchange(true)) {
     throw std::runtime_error("spin() called while already spinning");
   }
@@ -61,12 +67,13 @@ MultiThreadedExecutor::spin()
   {
     std::lock_guard wait_lock{wait_mutex_};
     for (; thread_id < number_of_threads_ - 1; ++thread_id) {
-      auto func = std::bind(&MultiThreadedExecutor::run, this, thread_id);
+      auto func =
+        std::bind(&MultiThreadedExecutor::run_guarded, this, thread_id, exception_handler);
       threads.emplace_back(func);
     }
   }
 
-  run(thread_id);
+  run_guarded(thread_id, exception_handler);
   for (auto & thread : threads) {
     thread.join();
   }
@@ -79,7 +86,8 @@ MultiThreadedExecutor::get_number_of_threads()
 }
 
 void
-MultiThreadedExecutor::run(size_t this_thread_number)
+MultiThreadedExecutor::run(
+  size_t this_thread_number)
 {
   (void)this_thread_number;
   while (rclcpp::ok(this->context_) && spinning.load()) {
@@ -102,5 +110,25 @@ MultiThreadedExecutor::run(size_t this_thread_number)
     // Clear the callback_group to prevent the AnyExecutable destructor from
     // resetting the callback group `can_be_taken_from`
     any_exec.callback_group.reset();
+  }
+}
+
+void
+MultiThreadedExecutor::run_guarded(
+  size_t this_thread_number,
+  std::function<void(const std::exception &)> exception_handler)
+{
+  if (exception_handler) {
+    try {
+      run(this_thread_number);
+    } catch (const std::exception & e) {
+      RCLCPP_ERROR_STREAM(
+        rclcpp::get_logger("rclcpp"),
+        "Exception while spinning : " << e.what());
+
+      exception_handler(e);
+    }
+  } else {
+    run(this_thread_number);
   }
 }
