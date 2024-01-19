@@ -36,6 +36,7 @@
 #include "rclcpp/duration.hpp"
 #include "rclcpp/guard_condition.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp/executors/cbg_executor.hpp"
 
 #include "test_msgs/msg/empty.hpp"
 
@@ -89,6 +90,7 @@ using ExecutorTypes =
   rclcpp::executors::SingleThreadedExecutor,
   rclcpp::executors::MultiThreadedExecutor,
   rclcpp::executors::StaticSingleThreadedExecutor,
+  rclcpp::executors::CBGExecutor,
   rclcpp::experimental::executors::EventsExecutor>;
 
 class ExecutorTypeNames
@@ -110,6 +112,10 @@ public:
       return "StaticSingleThreadedExecutor";
     }
 
+    if (std::is_same<T, rclcpp::executors::CBGExecutor>()) {
+      return "CallbackGroupExecutor";
+    }
+
     if (std::is_same<T, rclcpp::experimental::executors::EventsExecutor>()) {
       return "EventsExecutor";
     }
@@ -128,6 +134,7 @@ using StandardExecutors =
   ::testing::Types<
   rclcpp::executors::SingleThreadedExecutor,
   rclcpp::executors::MultiThreadedExecutor,
+  rclcpp::executors::CBGExecutor,
   rclcpp::experimental::executors::EventsExecutor>;
 TYPED_TEST_SUITE(TestExecutorsStable, StandardExecutors, ExecutorTypeNames);
 
