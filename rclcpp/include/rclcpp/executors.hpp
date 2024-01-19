@@ -67,10 +67,11 @@ using rclcpp::executors::SingleThreadedExecutor;
  *   If the time spent inside the blocking loop exceeds this timeout, return a `TIMEOUT` return code.
  * \return The return code, one of `SUCCESS`, `INTERRUPTED`, or `TIMEOUT`.
  */
-template<typename FutureT, typename TimeRepT = int64_t, typename TimeT = std::milli>
+template<typename FutureT, typename Executor, typename TimeRepT = int64_t,
+  typename TimeT = std::milli>
 rclcpp::FutureReturnCode
 spin_node_until_future_complete(
-  rclcpp::Executor & executor,
+  Executor & executor,
   rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node_ptr,
   const FutureT & future,
   std::chrono::duration<TimeRepT, TimeT> timeout = std::chrono::duration<TimeRepT, TimeT>(-1))
@@ -83,11 +84,12 @@ spin_node_until_future_complete(
   return retcode;
 }
 
-template<typename NodeT = rclcpp::Node, typename FutureT, typename TimeRepT = int64_t,
+template<typename NodeT = rclcpp::Node, typename FutureT, typename Executor,
+  typename TimeRepT = int64_t,
   typename TimeT = std::milli>
 rclcpp::FutureReturnCode
 spin_node_until_future_complete(
-  rclcpp::Executor & executor,
+  Executor & executor,
   std::shared_ptr<NodeT> node_ptr,
   const FutureT & future,
   std::chrono::duration<TimeRepT, TimeT> timeout = std::chrono::duration<TimeRepT, TimeT>(-1))
