@@ -1123,18 +1123,10 @@ CBGExecutor::execute_any_executable(AnyExecutable & any_exec)
   }
   if (any_exec.timer) {
 //         RCUTILS_LOG_ERROR_NAMED("rclcpp", "Executing Timer");
-
-
-    TRACETOOLS_TRACEPOINT(
-      rclcpp_executor_execute,
-      static_cast<const void *>(any_exec.timer->get_timer_handle().get()));
-    rclcpp::Executor::execute_timer(any_exec.timer);
+    rclcpp::Executor::execute_timer(any_exec.timer, any_exec.data);
   }
   if (any_exec.subscription) {
 //         RCUTILS_LOG_ERROR_NAMED("rclcpp", "Executing subscription");
-    TRACETOOLS_TRACEPOINT(
-      rclcpp_executor_execute,
-      static_cast<const void *>(any_exec.subscription->get_subscription_handle().get()));
     rclcpp::Executor::execute_subscription(any_exec.subscription);
   }
   if (any_exec.service) {
