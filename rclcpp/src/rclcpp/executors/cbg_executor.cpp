@@ -868,7 +868,9 @@ void CBGExecutor::wait_for_work(
       continue;
     }
 
-    foo.executables.emplace_back(node_ptr->get_shared_notify_guard_condition(), std::function<void(void)>());
+    foo.executables.emplace_back(node_ptr->get_shared_notify_guard_condition(),
+                                 [this] () { needs_callback_group_resync.store(true);
+                                 });
     wait_set_size.add_guard_condition();
 
   }
