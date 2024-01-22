@@ -124,9 +124,18 @@ private:
   {
     any_executable.timer = ptr.lock();
     if (any_executable.timer) {
+        auto data = any_executable.timer->call();
+        if (!data) {
+          // timer was cancelled, skip it.
+          return false;
+        }
+
+        any_executable.data = *data;
+
+        return true;
       //RCUTILS_LOG_INFO("Executing timer");
     }
-    return any_executable.timer.operator bool();
+    return false;
   }
   bool fill_any_executable(AnyExecutable & any_executable, const rclcpp::ServiceBase::WeakPtr & ptr)
   {
@@ -148,9 +157,11 @@ private:
   {
     any_executable.waitable = ptr.lock();
     if (any_executable.waitable) {
-      //RCUTILS_LOG_INFO("Executing waitable");
+        any_executable.data = any_executable.waitable->take_data();
+        return true;
     }
-    return any_executable.waitable.operator bool();
+
+    return false;
   }
 
   std::vector<Executable> ready_executables;
