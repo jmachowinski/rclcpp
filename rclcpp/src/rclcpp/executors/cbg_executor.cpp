@@ -995,7 +995,7 @@ void CBGExecutor::fill_callback_group_data(
   for (size_t i = 0; i < mapping.events_map.size(); ++i) {
     AnyExecutableWeakRef & ready_exec(*mapping.events_map[i]);
     if (wait_set.events[i]) {
-      RCUTILS_LOG_INFO("Found ready events");
+//       RCUTILS_LOG_INFO("Found ready events");
       add_executable(ready_exec);
     }
     else
@@ -1005,17 +1005,17 @@ void CBGExecutor::fill_callback_group_data(
   }
   for (size_t i = 0; i < mapping.guard_conditions_map.size(); ++i) {
     if (wait_set.guard_conditions[i]) {
-      RCLCPP_INFO_STREAM(rclcpp::get_logger("cbg_executor"), "Found ready guard_conditions : " << wait_set.guard_conditions[i] << " at idx " << i );
+//       RCLCPP_INFO_STREAM(rclcpp::get_logger("cbg_executor"), "Found ready guard_conditions : " << wait_set.guard_conditions[i] << " at idx " << i );
 //       RCUTILS_LOG_INFO("Found ready guard_conditions");
       AnyExecutableWeakRef & ready_exec(*mapping.guard_conditions_map[i]);
-      RCLCPP_INFO_STREAM(rclcpp::get_logger("cbg_executor"), "AnyExecutableWeakRef is : " << &ready_exec);
+//       RCLCPP_INFO_STREAM(rclcpp::get_logger("cbg_executor"), "AnyExecutableWeakRef is : " << &ready_exec);
       add_executable(ready_exec);
     }
   }
   for (size_t i = 0; i < mapping.services_map.size(); ++i) {
     AnyExecutableWeakRef & ready_exec(*mapping.services_map[i]);
     if (wait_set.services[i]) {
-      RCUTILS_LOG_INFO("Found ready services");
+//       RCUTILS_LOG_INFO("Found ready services");
       add_executable(ready_exec);
     }
     else
@@ -1026,7 +1026,7 @@ void CBGExecutor::fill_callback_group_data(
   for (size_t i = 0; i < mapping.subscription_map.size(); ++i) {
     AnyExecutableWeakRef & ready_exec(*mapping.subscription_map[i]);
     if (wait_set.subscriptions[i]) {
-      RCUTILS_LOG_INFO("Found ready subscriptions");
+//       RCUTILS_LOG_INFO("Found ready subscriptions");
 
       add_executable(ready_exec);
     }
@@ -1038,7 +1038,7 @@ void CBGExecutor::fill_callback_group_data(
   for (size_t i = 0; i < mapping.timer_map.size(); ++i) {
     AnyExecutableWeakRef & ready_exec(*mapping.timer_map[i]);
     if (wait_set.timers[i]) {
-      RCUTILS_LOG_INFO("Found ready timers");
+//       RCUTILS_LOG_INFO("Found ready timers");
       add_executable(ready_exec);
     }
     else
