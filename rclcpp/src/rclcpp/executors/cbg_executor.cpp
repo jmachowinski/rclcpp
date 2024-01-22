@@ -69,9 +69,19 @@ struct AnyExecutableWeakRef
     // therefore they shall never create a real executable
   }
 
+ AnyExecutableWeakRef(const AnyExecutableWeakRef &) = delete;
+
+ AnyExecutableWeakRef(AnyExecutableWeakRef &&) = default;
+
+ AnyExecutableWeakRef& operator= (const AnyExecutableWeakRef &) = delete;
+
   std::variant<const rclcpp::SubscriptionBase::WeakPtr, const rclcpp::TimerBase::WeakPtr,
     const rclcpp::ServiceBase::WeakPtr, const rclcpp::ClientBase::WeakPtr,
     const rclcpp::Waitable::WeakPtr, const rclcpp::GuardCondition::WeakPtr> executable;
+
+  // shared_ptr holding the handle during wait
+  std::shared_ptr<const void> rcl_handle_shr_ptr;
+
   std::function<void(void)> handle_guard_condition_fun;
   int16_t callback_group_index;
   bool processed = false;
@@ -170,16 +180,21 @@ struct ExecutableWeakPtrCache
       executables.emplace_back(weak_ptr, temporaryCallbackGroupIndex);
     }
 
-    for (const rclcpp::Waitable::WeakPtr & weak_ptr: state.waitable_ptrs) {
-      executables.emplace_back(weak_ptr, temporaryCallbackGroupIndex);
-    }
-
     // FIXME insert regenerate trigger function here
     executables.emplace_back(
       state.trigger_ptr, [this]() {
         cache_ditry = true;
       }
     );
+
+
+    // It is curcial tht the waitables get added last. All other elements have a one to one mapping, and
+    // the mapping below takes advantage of this as an optimization
+    for (const rclcpp::Waitable::WeakPtr & weak_ptr: state.waitable_ptrs) {
+      executables.emplace_back(weak_ptr, temporaryCallbackGroupIndex);
+    }
+
+
 
     cache_ditry = false;
   }
@@ -271,12 +286,14 @@ struct RCLToRCLCPPMap
       return true;
     }
 
-    subscription_map.push_back(&executable_ref);
+    auto handle_shr_ptr = sub_ptr->get_subscription_handle();
+    executable_ref.rcl_handle_shr_ptr = handle_shr_ptr;
+    subscription_map.emplace_back(&executable_ref);
 
     size_t idx;
 
     if (rcl_wait_set_add_subscription(
-        &ws, sub_ptr->get_subscription_handle().get(),
+        &ws, handle_shr_ptr.get(),
         &idx) != RCL_RET_OK)
     {
       RCUTILS_LOG_ERROR_NAMED(
@@ -303,11 +320,13 @@ struct RCLToRCLCPPMap
       return true;
     }
 
-    clients_map.push_back(&any_exec);
+    auto handle_shr_ptr = client_ptr->get_client_handle();
+    any_exec.rcl_handle_shr_ptr = handle_shr_ptr;
+    clients_map.emplace_back(&any_exec);
 
     size_t idx;
 
-    if (rcl_wait_set_add_client(&ws, client_ptr->get_client_handle().get(), &idx) != RCL_RET_OK) {
+    if (rcl_wait_set_add_client(&ws, handle_shr_ptr.get(), &idx) != RCL_RET_OK) {
       RCUTILS_LOG_ERROR_NAMED(
         "rclcpp",
         "Couldn't add client to wait set: %s", rcl_get_error_string().str);
@@ -330,11 +349,13 @@ struct RCLToRCLCPPMap
       return true;
     }
 
-    services_map.push_back(&any_exec);
+    auto handle_shr_ptr = shr_ptr->get_service_handle();
+    any_exec.rcl_handle_shr_ptr = handle_shr_ptr;
+    services_map.emplace_back(&any_exec);
 
     size_t idx;
 
-    if (rcl_wait_set_add_service(&ws, shr_ptr->get_service_handle().get(), &idx) != RCL_RET_OK) {
+    if (rcl_wait_set_add_service(&ws, handle_shr_ptr.get(), &idx) != RCL_RET_OK) {
       RCUTILS_LOG_ERROR_NAMED(
         "rclcpp",
         "Couldn't add service to wait set: %s", rcl_get_error_string().str);
@@ -356,11 +377,13 @@ struct RCLToRCLCPPMap
       return true;
     }
 
-    timer_map.push_back(&any_exec);
+    auto handle_shr_ptr = shr_ptr->get_timer_handle();
+    any_exec.rcl_handle_shr_ptr = handle_shr_ptr;
+    timer_map.emplace_back(&any_exec);
 
     size_t idx;
 
-    if (rcl_wait_set_add_timer(&ws, shr_ptr->get_timer_handle().get(), &idx) != RCL_RET_OK) {
+    if (rcl_wait_set_add_timer(&ws, handle_shr_ptr.get(), &idx) != RCL_RET_OK) {
       RCUTILS_LOG_ERROR_NAMED(
         "rclcpp",
         "Couldn't add timer to wait set: %s", rcl_get_error_string().str);
@@ -397,14 +420,14 @@ struct RCLToRCLCPPMap
     {
       const size_t diff = after_waitable.client_index - before_waitable.client_index;
       for (size_t i = 0; i < diff; i++) {
-        clients_map.push_back(&any_exec);
+        clients_map.emplace_back(&any_exec);
       }
     }
 
     {
       const size_t diff = after_waitable.event_index - before_waitable.event_index;
       for (size_t i = 0; i < diff; i++) {
-        events_map.push_back(&any_exec);
+        events_map.emplace_back(&any_exec);
       }
     }
 
@@ -412,28 +435,28 @@ struct RCLToRCLCPPMap
       const size_t diff = after_waitable.guard_condition_index -
         before_waitable.guard_condition_index;
       for (size_t i = 0; i < diff; i++) {
-        guard_conditions_map.push_back(&any_exec);
+        guard_conditions_map.emplace_back(&any_exec);
       }
     }
 
     {
       const size_t diff = after_waitable.service_index - before_waitable.service_index;
       for (size_t i = 0; i < diff; i++) {
-        services_map.push_back(&any_exec);
+        services_map.emplace_back(&any_exec);
       }
     }
 
     {
       const size_t diff = after_waitable.subscription_index - before_waitable.subscription_index;
       for (size_t i = 0; i < diff; i++) {
-        subscription_map.push_back(&any_exec);
+        subscription_map.emplace_back(&any_exec);
       }
     }
 
     {
       const size_t diff = after_waitable.timer_index - before_waitable.timer_index;
       for (size_t i = 0; i < diff; i++) {
-        timer_map.push_back(&any_exec);
+        timer_map.emplace_back(&any_exec);
       }
     }
 
@@ -458,7 +481,7 @@ struct RCLToRCLCPPMap
 
     const auto & gc = shr_ptr->get_rcl_guard_condition();
 
-    size_t idx = 0;
+    size_t idx = 200;
     rcl_ret_t ret = rcl_wait_set_add_guard_condition(&ws, &gc, &idx);
 
     if (RCL_RET_OK != ret) {
@@ -466,8 +489,10 @@ struct RCLToRCLCPPMap
         ret, "failed to add guard condition to wait set");
     }
 
-    guard_conditions_map.push_back(&any_exec);
+    guard_conditions_map.emplace_back(&any_exec);
 
+    // verify that our mapping is correct
+    assert(idx == guard_conditions_map.size() - 1);
     return true;
   }
 
@@ -681,9 +706,6 @@ bool CBGExecutor::get_next_ready_executable(AnyExecutable & any_executable)
     for (const ReadyCallbacksWithSharedPtr & ready_elem: ready_callbacks) {
       if (ready_elem.data->scheduler->get_unprocessed_executable(any_executable, cur_prio)) {
         any_executable.callback_group = ready_elem.callback_group;
-        if (any_executable.waitable) {
-          any_executable.data = any_executable.waitable->take_data();
-        }
 
         return true;
       }
@@ -831,6 +853,25 @@ void CBGExecutor::wait_for_work(
   wait_set_size.add_guard_condition();
   wait_set_size.add_guard_condition();
 
+  std::vector<node_interfaces::NodeBaseInterface::WeakPtr> added_nodes_cpy;
+  {
+    std::lock_guard lock{added_nodes_mutex_};
+    added_nodes_cpy = added_nodes;
+  }
+
+  ExecutableWeakPtrCache foo;
+  for(const auto &weak_ptr : added_nodes_cpy)
+  {
+    auto node_ptr = weak_ptr.lock();
+    if(!node_ptr)
+    {
+      continue;
+    }
+
+    foo.executables.emplace_back(node_ptr->get_shared_notify_guard_condition(), std::function<void(void)>());
+    wait_set_size.add_guard_condition();
+
+  }
 
   //FIXME add a guard condition per node
 
@@ -839,6 +880,8 @@ void CBGExecutor::wait_for_work(
 
   // prepare the wait set
   wait_set_size.clear_and_resize_wait_set(wait_set_);
+
+  mapping.add_to_wait_set_and_mapping(wait_set_, foo, -1);
 
 
   //FIXME add a guard condition per node
@@ -938,46 +981,69 @@ void CBGExecutor::fill_callback_group_data(
       ready_exec.processed = true;
     };
 
-  for (size_t i = 0; i < wait_set.size_of_clients; ++i) {
+  for (size_t i = 0; i < mapping.clients_map.size(); ++i) {
+    AnyExecutableWeakRef & ready_exec(*mapping.clients_map[i]);
     if (wait_set.clients[i]) {
       //RCUTILS_LOG_I("Found ready client");
-      AnyExecutableWeakRef & ready_exec(*mapping.clients_map[i]);
       add_executable(ready_exec);
     }
+    else
+    {
+      ready_exec.rcl_handle_shr_ptr.reset();
+    }
   }
-  for (size_t i = 0; i < wait_set.size_of_events; ++i) {
+  for (size_t i = 0; i < mapping.events_map.size(); ++i) {
+    AnyExecutableWeakRef & ready_exec(*mapping.events_map[i]);
     if (wait_set.events[i]) {
-      //RCUTILS_LOG_I("Found ready events");
-      AnyExecutableWeakRef & ready_exec(*mapping.events_map[i]);
+      RCUTILS_LOG_INFO("Found ready events");
       add_executable(ready_exec);
     }
+    else
+    {
+      ready_exec.rcl_handle_shr_ptr.reset();
+    }
   }
-  for (size_t i = 0; i < wait_set.size_of_guard_conditions; ++i) {
+  for (size_t i = 0; i < mapping.guard_conditions_map.size(); ++i) {
     if (wait_set.guard_conditions[i]) {
-      //RCUTILS_LOG_I("Found ready guard_conditions");
+      RCLCPP_INFO_STREAM(rclcpp::get_logger("cbg_executor"), "Found ready guard_conditions : " << wait_set.guard_conditions[i] << " at idx " << i );
+//       RCUTILS_LOG_INFO("Found ready guard_conditions");
       AnyExecutableWeakRef & ready_exec(*mapping.guard_conditions_map[i]);
+      RCLCPP_INFO_STREAM(rclcpp::get_logger("cbg_executor"), "AnyExecutableWeakRef is : " << &ready_exec);
       add_executable(ready_exec);
     }
   }
-  for (size_t i = 0; i < wait_set.size_of_services; ++i) {
+  for (size_t i = 0; i < mapping.services_map.size(); ++i) {
+    AnyExecutableWeakRef & ready_exec(*mapping.services_map[i]);
     if (wait_set.services[i]) {
-      //RCUTILS_LOG_I("Found ready services");
-      AnyExecutableWeakRef & ready_exec(*mapping.services_map[i]);
+      RCUTILS_LOG_INFO("Found ready services");
       add_executable(ready_exec);
     }
+    else
+    {
+      ready_exec.rcl_handle_shr_ptr.reset();
+    }
   }
-  for (size_t i = 0; i < wait_set.size_of_subscriptions; ++i) {
+  for (size_t i = 0; i < mapping.subscription_map.size(); ++i) {
+    AnyExecutableWeakRef & ready_exec(*mapping.subscription_map[i]);
     if (wait_set.subscriptions[i]) {
-      //RCUTILS_LOG_I("Found ready subscriptions");
-      AnyExecutableWeakRef & ready_exec(*mapping.subscription_map[i]);
+      RCUTILS_LOG_INFO("Found ready subscriptions");
+
       add_executable(ready_exec);
     }
+    else
+    {
+      ready_exec.rcl_handle_shr_ptr.reset();
+    }
   }
-  for (size_t i = 0; i < wait_set.size_of_timers; ++i) {
+  for (size_t i = 0; i < mapping.timer_map.size(); ++i) {
+    AnyExecutableWeakRef & ready_exec(*mapping.timer_map[i]);
     if (wait_set.timers[i]) {
-      //RCUTILS_LOG_I("Found ready timers");
-      AnyExecutableWeakRef & ready_exec(*mapping.timer_map[i]);
+      RCUTILS_LOG_INFO("Found ready timers");
       add_executable(ready_exec);
+    }
+    else
+    {
+      ready_exec.rcl_handle_shr_ptr.reset();
     }
   }
 }
