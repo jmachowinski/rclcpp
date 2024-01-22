@@ -39,6 +39,7 @@
 #include "rclcpp/executors/cbg_executor.hpp"
 
 #include "test_msgs/msg/empty.hpp"
+#include "test_msgs/srv/empty.hpp"
 
 using namespace std::chrono_literals;
 
@@ -731,6 +732,89 @@ TYPED_TEST(TestExecutors, testSpinUntilFutureCompleteInterrupted)
   EXPECT_TRUE(spin_exited);
   spinner.join();
 }
+
+
+// Check spin_until_future_complete can be properly interrupted.
+TYPED_TEST(TestExecutors, testService)
+{
+  using ExecutorType = TypeParam;
+  // rmw_connextdds doesn't support events-executor
+  if (
+    std::is_same<ExecutorType, rclcpp::experimental::executors::EventsExecutor>() &&
+    std::string(rmw_get_implementation_identifier()).find("rmw_connextdds") == 0)
+  {
+    GTEST_SKIP();
+  }
+
+  ExecutorType executor;
+  executor.add_node(this->node);
+
+  bool spin_exited = false;
+
+  rclcpp::Node::SharedPtr node = this->node;
+//   rclcpp::Node::SharedPtr node = std::make_shared<rclcpp::Node>("test_node");
+
+  const std::string service_name("/test/test_service");
+
+  using Service = test_msgs::srv::Empty;
+
+
+  bool gotCallback = false;
+
+
+
+  auto service_cb = [&gotCallback] (const std::shared_ptr<Service::Request> /*request*/,
+         std::shared_ptr<Service::Response>      /*response*/)
+  {
+    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Service Callback");
+    gotCallback = true;
+  };
+
+  auto service_cbg = node->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+  auto service = node->create_service<Service>(service_name, service_cb, rclcpp::ServicesQoS(), service_cbg);
+
+  // Long timeout
+  std::thread spinner([&spin_exited, &executor]() {
+      executor.spin();
+      spin_exited = true;
+    });
+
+  std::this_thread::sleep_for(1ms);
+
+  const std::shared_ptr<Service::Request> req = std::make_shared<Service::Request>();
+
+  auto client = node->create_client<Service>(service_name);
+
+
+  RCLCPP_INFO_STREAM(rclcpp::get_logger("TestExecutors"), "Triggering Default CBG, ptr of rcl primitive is " << &node->get_node_base_interface()->get_default_callback_group()->get_notify_guard_condition()->get_rcl_guard_condition());
+
+  node->get_node_base_interface()->get_default_callback_group()->get_notify_guard_condition()->trigger();
+//   service_cbg->get_notify_guard_condition()->trigger();
+
+
+  EXPECT_TRUE(client->wait_for_service(30ms));
+
+  auto handle = client->async_send_request(req);
+
+  auto retCode = handle.wait_for(500ms);
+  EXPECT_EQ(retCode, std::future_status::ready);
+
+  EXPECT_TRUE(gotCallback);
+
+  // Force interruption
+  rclcpp::shutdown();
+
+  // Give it time to exit
+  auto start = std::chrono::steady_clock::now();
+  while (!spin_exited && (std::chrono::steady_clock::now() - start) < 1s) {
+    std::this_thread::sleep_for(1ms);
+  }
+
+  EXPECT_TRUE(spin_exited);
+  spinner.join();
+}
+
 
 // This test verifies that the add_node operation is robust wrt race conditions.
 // It's mostly meant to prevent regressions in the events-executor, but the operation should be
