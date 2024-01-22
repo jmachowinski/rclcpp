@@ -1093,6 +1093,8 @@ void CBGExecutor::spin_once_internal(std::chrono::nanoseconds timeout)
         return;
       }
     }
+
+    any_exec.callback_group->can_be_taken_from().store(false);
   }
 
 //     RCUTILS_LOG_ERROR_NAMED(
