@@ -540,6 +540,49 @@ BENCHMARK_F(
   spin_node_until_future_complete<rclcpp::executors::StaticSingleThreadedExecutor>(st);
 }
 
+class SharedPtrHolder : public PerformanceTest
+{
+public:
+  void SetUp(benchmark::State & st)
+  {
+    shared_ptr = std::make_shared<std::string>("foo");
+    weak_ptr = shared_ptr;
+    PerformanceTest::SetUp(st);
+  }
+  void TearDown(benchmark::State & st)
+  {
+    PerformanceTest::TearDown(st);
+    shared_ptr.reset();
+    weak_ptr.reset();
+  }
+  std::shared_ptr<std::string> shared_ptr;
+  std::weak_ptr<std::string> weak_ptr;
+};
+
+
+BENCHMARK_F(SharedPtrHolder,
+  shared_ptr_ref)(benchmark::State & st)
+{
+    for (auto _ : st) {
+    (void)_;
+      size_t cnt = shared_ptr.use_count();
+      benchmark::DoNotOptimize(cnt);
+    }
+}
+
+BENCHMARK_F(SharedPtrHolder,
+  weakt_upcast)(benchmark::State & st)
+{
+    for (auto _ : st) {
+    (void)_;
+
+      std::shared_ptr<std::string> ptr = weak_ptr.lock();
+      benchmark::DoNotOptimize(ptr);
+
+    }
+}
+
+
 BENCHMARK_F(
   PerformanceTestExecutorSimple,
   static_single_thread_executor_spin_until_future_complete)(benchmark::State & st)

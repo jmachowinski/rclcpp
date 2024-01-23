@@ -22,6 +22,7 @@
 #include <unordered_map>
 
 #include "rclcpp/executor.hpp"
+#include "rclcpp/executors/callback_group_state.hpp"
 #include "rclcpp/macros.hpp"
 #include "rclcpp/memory_strategies.hpp"
 #include "rclcpp/visibility_control.hpp"
@@ -30,29 +31,6 @@ namespace rclcpp
 {
 namespace executors
 {
-
-
-struct CallbackGroupState
-{
-  CallbackGroupState(rclcpp::CallbackGroup & cbg)
-  {
-    update(cbg);
-  }
-
-  void update(rclcpp::CallbackGroup & cbg)
-  {
-    cbg.collect_all_ptrs(subscription_ptrs, timer_ptrs, service_ptrs, client_ptrs, waitable_ptrs);
-    trigger_ptr = cbg.get_notify_guard_condition();
-  }
-
-  std::vector<rclcpp::SubscriptionBase::WeakPtr> subscription_ptrs;
-  std::vector<rclcpp::TimerBase::WeakPtr> timer_ptrs;
-  std::vector<rclcpp::ServiceBase::WeakPtr> service_ptrs;
-  std::vector<rclcpp::ClientBase::WeakPtr> client_ptrs;
-  std::vector<rclcpp::Waitable::WeakPtr> waitable_ptrs;
-
-  rclcpp::GuardCondition::WeakPtr trigger_ptr;
-};
 
 template<class Executable>
 class ExecutionGroup
@@ -205,10 +183,10 @@ private:
   ExecutionGroup<rclcpp::Waitable::WeakPtr> ready_waitables;
 };
 
-struct ExecutableWeakPtrCache;
+struct AnyExecutableWeakRefCache;
 struct RCLToRCLCPPMap;
 
-class CBGExecutor
+class CBGExecutor : public rclcpp::Executor
 {
 public:
   RCLCPP_SMART_PTR_DEFINITIONS(CBGExecutor)
@@ -396,7 +374,7 @@ protected:
 
     std::unique_ptr<CallbackGroupScheduler> scheduler;
     std::unique_ptr<CallbackGroupState> callback_group_state;
-    std::unique_ptr<ExecutableWeakPtrCache> executable_cache;
+    std::unique_ptr<AnyExecutableWeakRefCache> executable_cache;
 
     bool callback_group_state_needs_update = false;
   };
@@ -455,10 +433,10 @@ private:
 
   /// Stores the executables for the internal guard conditions
   /// e.g. interrupt_guard_condition_ and shutdown_guard_condition_
-  std::unique_ptr<ExecutableWeakPtrCache> global_executable_cache;
+  std::unique_ptr<AnyExecutableWeakRefCache> global_executable_cache;
 
   /// Stores the executables for guard conditions of the nodes
-  std::unique_ptr<ExecutableWeakPtrCache> nodes_executable_cache;
+  std::unique_ptr<AnyExecutableWeakRefCache> nodes_executable_cache;
 
 
 };

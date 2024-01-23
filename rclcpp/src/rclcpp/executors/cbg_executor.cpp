@@ -26,535 +26,11 @@
 #include "rclcpp/logging.hpp"
 #include "rclcpp/node.hpp"
 #include "rclcpp/utilities.hpp"
+#include "rclcpp/executors/detail/rcl_to_rclcpp_map.hpp"
+#include "rclcpp/executors/detail/any_executable_weak_ref.hpp"
 
 namespace rclcpp::executors
 {
-
-struct AnyExecutableWeakRef
-{
-  AnyExecutableWeakRef(const rclcpp::SubscriptionBase::WeakPtr & p, int16_t callback_group_index)
-  : executable(p),
-    callback_group_index(callback_group_index)
-  {}
-
-  AnyExecutableWeakRef(const rclcpp::TimerBase::WeakPtr & p, int16_t callback_group_index)
-  : executable(p),
-    callback_group_index(callback_group_index)
-  {}
-
-  AnyExecutableWeakRef(const rclcpp::ServiceBase::WeakPtr & p, int16_t callback_group_index)
-  : executable(p),
-    callback_group_index(callback_group_index)
-  {}
-
-  AnyExecutableWeakRef(const rclcpp::ClientBase::WeakPtr & p, int16_t callback_group_index)
-  : executable(p),
-    callback_group_index(callback_group_index)
-  {}
-
-  AnyExecutableWeakRef(const rclcpp::Waitable::WeakPtr & p, int16_t callback_group_index)
-  : executable(p),
-    callback_group_index(callback_group_index)
-  {}
-
-  AnyExecutableWeakRef(
-    const rclcpp::GuardCondition::WeakPtr & p,
-    const std::function<void(void)> & fun)
-  : executable(p),
-    handle_guard_condition_fun(fun),
-    callback_group_index(-1),
-    processed(!fun)
-  {
-    //special case, guard conditions are auto processed by waking up the wait set
-    // therefore they shall never create a real executable
-  }
-
- AnyExecutableWeakRef(const AnyExecutableWeakRef &) = delete;
-
- AnyExecutableWeakRef(AnyExecutableWeakRef &&) = default;
-
- AnyExecutableWeakRef& operator= (const AnyExecutableWeakRef &) = delete;
-
-  std::variant<const rclcpp::SubscriptionBase::WeakPtr, const rclcpp::TimerBase::WeakPtr,
-    const rclcpp::ServiceBase::WeakPtr, const rclcpp::ClientBase::WeakPtr,
-    const rclcpp::Waitable::WeakPtr, const rclcpp::GuardCondition::WeakPtr> executable;
-
-  enum ExecutableIndex
-  {
-    Subscription = 0,
-    Timer,
-    Service,
-    Client,
-    Waitable,
-    GuardCondition,
-  };
-
-  // shared_ptr holding the handle during wait
-  std::shared_ptr<const void> rcl_handle_shr_ptr;
-
-  std::function<void(void)> handle_guard_condition_fun;
-  int16_t callback_group_index;
-  bool processed = false;
-};
-
-
-
-
-/// Just a collection of AnyExecutableWeakRef of a callback group
-struct ExecutableWeakPtrCache
-{
-  std::vector<AnyExecutableWeakRef> executables;
-
-  size_t temporaryCallbackGroupIndex = 0;
-
-  bool cache_ditry = true;
-
-  void regenerate(const CallbackGroupState & state)
-  {
-    executables.clear();
-    executables.reserve(
-      state.client_ptrs.size() +
-      state.service_ptrs.size() +
-      state.subscription_ptrs.size() +
-      state.timer_ptrs.size() +
-      state.waitable_ptrs.size() + 1);
-
-    for (const rclcpp::SubscriptionBase::WeakPtr & weak_ptr: state.subscription_ptrs) {
-      executables.emplace_back(weak_ptr, temporaryCallbackGroupIndex);
-    }
-
-    for (const rclcpp::ClientBase::WeakPtr & weak_ptr: state.client_ptrs) {
-      executables.emplace_back(weak_ptr, temporaryCallbackGroupIndex);
-    }
-
-    for (const rclcpp::ServiceBase::WeakPtr & weak_ptr: state.service_ptrs) {
-      executables.emplace_back(weak_ptr, temporaryCallbackGroupIndex);
-    }
-
-    for (const rclcpp::TimerBase::WeakPtr & weak_ptr: state.timer_ptrs) {
-      executables.emplace_back(weak_ptr, temporaryCallbackGroupIndex);
-    }
-
-    for (const rclcpp::Waitable::WeakPtr & weak_ptr: state.waitable_ptrs) {
-      executables.emplace_back(weak_ptr, temporaryCallbackGroupIndex);
-    }
-
-    executables.emplace_back(
-      state.trigger_ptr, [this]() {
-        cache_ditry = true;
-      }
-    );
-
-    cache_ditry = false;
-  }
-
-};
-
-struct WaitSetSize
-{
-  size_t subscriptions = 0;
-  size_t clients = 0;
-  size_t services = 0;
-  size_t timers = 0;
-  size_t guard_conditions = 0;
-  size_t events = 0;
-
-  void addWaitable(const rclcpp::Waitable::WeakPtr & waitable_weak_ptr)
-  {
-      rclcpp::Waitable::SharedPtr waitable_ptr = waitable_weak_ptr.lock();
-      if (!waitable_ptr) {
-        return;
-      }
-
-      subscriptions += waitable_ptr->get_number_of_ready_subscriptions();
-      clients += waitable_ptr->get_number_of_ready_clients();
-      services += waitable_ptr->get_number_of_ready_services();
-      timers += waitable_ptr->get_number_of_ready_timers();
-      guard_conditions += waitable_ptr->get_number_of_ready_guard_conditions();
-      events += waitable_ptr->get_number_of_ready_events();
-  }
-
-  void addExecutableWeakPtrCache(const ExecutableWeakPtrCache & cache)
-  {
-    for(const AnyExecutableWeakRef &entry : cache.executables)
-    {
-      switch(entry.executable.index())
-      {
-        case AnyExecutableWeakRef::ExecutableIndex::Subscription:
-          subscriptions++;
-          break;
-        case AnyExecutableWeakRef::ExecutableIndex::Timer:
-          timers++;
-          break;
-        case AnyExecutableWeakRef::ExecutableIndex::Service:
-          services++;
-          break;
-        case AnyExecutableWeakRef::ExecutableIndex::Client:
-          clients++;
-          break;
-        case AnyExecutableWeakRef::ExecutableIndex::Waitable:
-          addWaitable(std::get<const rclcpp::Waitable::WeakPtr>(entry.executable));
-          break;
-        case AnyExecutableWeakRef::ExecutableIndex::GuardCondition:
-          guard_conditions++;
-          break;
-      }
-    }
-  }
-
-
-  void addCallbackGroupState(const CallbackGroupState & state)
-  {
-    subscriptions += state.subscription_ptrs.size();
-    clients += state.client_ptrs.size();
-    services += state.service_ptrs.size();
-    timers += state.timer_ptrs.size();
-    // A callback group contains one guard condition
-    guard_conditions++;
-
-    for (const rclcpp::Waitable::WeakPtr & waitable_weak_ptr: state.waitable_ptrs) {
-      addWaitable(waitable_weak_ptr);
-    }
-  }
-
-  void clear_and_resize_wait_set(rcl_wait_set_s & wait_set) const
-  {
-    // clear wait set
-    rcl_ret_t ret = rcl_wait_set_clear(&wait_set);
-    if (ret != RCL_RET_OK) {
-      exceptions::throw_from_rcl_error(ret, "Couldn't clear wait set");
-    }
-
-    // The size of waitables are accounted for in size of the other entities
-    ret = rcl_wait_set_resize(
-      &wait_set, subscriptions,
-      guard_conditions, timers,
-      clients, services, events);
-    if (RCL_RET_OK != ret) {
-      exceptions::throw_from_rcl_error(ret, "Couldn't resize the wait set");
-    }
-  }
-};
-
-struct RCLToRCLCPPMap
-{
-  RCLToRCLCPPMap(const WaitSetSize & wait_set_size)
-  {
-    subscription_map.reserve(wait_set_size.subscriptions);
-    guard_conditions_map.reserve(wait_set_size.guard_conditions);
-    timer_map.reserve(wait_set_size.timers);
-    clients_map.reserve(wait_set_size.clients);
-    services_map.reserve(wait_set_size.services);
-    events_map.reserve(wait_set_size.events);
-  }
-
-  std::vector<AnyExecutableWeakRef *> subscription_map;
-  std::vector<AnyExecutableWeakRef *> guard_conditions_map;
-  std::vector<AnyExecutableWeakRef *> timer_map;
-  std::vector<AnyExecutableWeakRef *> clients_map;
-  std::vector<AnyExecutableWeakRef *> services_map;
-  std::vector<AnyExecutableWeakRef *> events_map;
-
-  bool add_to_wait_set_and_mapping(rcl_wait_set_s & ws, AnyExecutableWeakRef & executable_ref)
-  {
-    switch (executable_ref.executable.index()) {
-      case AnyExecutableWeakRef::ExecutableIndex::Subscription:
-        {
-          return add_to_wait_set_and_mapping(
-            ws,
-            std::get<const rclcpp::SubscriptionBase::WeakPtr>(
-              executable_ref.executable), executable_ref);
-        }
-        break;
-      case AnyExecutableWeakRef::ExecutableIndex::Timer:
-        {
-          return add_to_wait_set_and_mapping(
-            ws,
-            std::get<const rclcpp::TimerBase::WeakPtr>(executable_ref.executable), executable_ref);
-        }
-        break;
-      case AnyExecutableWeakRef::ExecutableIndex::Service:
-        {
-          return add_to_wait_set_and_mapping(
-            ws,
-            std::get<const rclcpp::ServiceBase::WeakPtr>(executable_ref.executable),
-            executable_ref);
-        }
-        break;
-      case AnyExecutableWeakRef::ExecutableIndex::Client:
-        {
-          return add_to_wait_set_and_mapping(
-            ws,
-            std::get<const rclcpp::ClientBase::WeakPtr>(executable_ref.executable), executable_ref);
-        }
-        break;
-      case AnyExecutableWeakRef::ExecutableIndex::Waitable:
-        {
-          return add_to_wait_set_and_mapping(
-            ws,
-            std::get<const rclcpp::Waitable::WeakPtr>(executable_ref.executable), executable_ref);
-        }
-        break;
-      case AnyExecutableWeakRef::ExecutableIndex::GuardCondition:
-        {
-          return add_to_wait_set_and_mapping(
-            ws,
-            std::get<const rclcpp::GuardCondition::WeakPtr>(
-              executable_ref.executable), executable_ref);
-        }
-        break;
-
-    }
-
-    return false;
-  }
-
-
-  bool add_to_wait_set_and_mapping(
-    rcl_wait_set_s & ws,
-    const rclcpp::SubscriptionBase::WeakPtr & sub_weak_ptr,
-    AnyExecutableWeakRef & executable_ref)
-  {
-    const rclcpp::SubscriptionBase::SharedPtr & sub_ptr = sub_weak_ptr.lock();
-    if (!sub_ptr) {
-      // got deleted, we just ignore it
-      return true;
-    }
-
-    auto handle_shr_ptr = sub_ptr->get_subscription_handle();
-    executable_ref.rcl_handle_shr_ptr = handle_shr_ptr;
-    subscription_map.emplace_back(&executable_ref);
-
-    size_t idx;
-
-    if (rcl_wait_set_add_subscription(
-        &ws, handle_shr_ptr.get(),
-        &idx) != RCL_RET_OK)
-    {
-      RCUTILS_LOG_ERROR_NAMED(
-        "rclcpp",
-        "Couldn't add subscription to wait set: %s", rcl_get_error_string().str);
-      return false;
-    }
-
-    // verify that our mapping is correct
-    assert(idx == subscription_map.size() - 1);
-
-    return true;
-
-  }
-
-  bool add_to_wait_set_and_mapping(
-    rcl_wait_set_s & ws,
-    const rclcpp::ClientBase::WeakPtr & client_weak_ptr,
-    AnyExecutableWeakRef & any_exec)
-  {
-    const rclcpp::ClientBase::SharedPtr & client_ptr = client_weak_ptr.lock();
-    if (!client_ptr) {
-      // got deleted, we just ignore it from now on
-      return true;
-    }
-
-    auto handle_shr_ptr = client_ptr->get_client_handle();
-    any_exec.rcl_handle_shr_ptr = handle_shr_ptr;
-    clients_map.emplace_back(&any_exec);
-
-    size_t idx;
-
-    if (rcl_wait_set_add_client(&ws, handle_shr_ptr.get(), &idx) != RCL_RET_OK) {
-      RCUTILS_LOG_ERROR_NAMED(
-        "rclcpp",
-        "Couldn't add client to wait set: %s", rcl_get_error_string().str);
-      return false;
-    }
-
-    // verify that our mapping is correct
-    assert(idx == clients_map.size() - 1);
-    return true;
-  }
-
-  bool add_to_wait_set_and_mapping(
-    rcl_wait_set_s & ws,
-    const rclcpp::ServiceBase::WeakPtr & weak_ptr,
-    AnyExecutableWeakRef & any_exec)
-  {
-    const rclcpp::ServiceBase::SharedPtr & shr_ptr = weak_ptr.lock();
-    if (!shr_ptr) {
-      // got deleted, we just ignore it from now on
-      return true;
-    }
-
-    auto handle_shr_ptr = shr_ptr->get_service_handle();
-    any_exec.rcl_handle_shr_ptr = handle_shr_ptr;
-    services_map.emplace_back(&any_exec);
-
-    size_t idx;
-
-    if (rcl_wait_set_add_service(&ws, handle_shr_ptr.get(), &idx) != RCL_RET_OK) {
-      RCUTILS_LOG_ERROR_NAMED(
-        "rclcpp",
-        "Couldn't add service to wait set: %s", rcl_get_error_string().str);
-      return false;
-    }
-
-    // verify that our mapping is correct
-    assert(idx == services_map.size() - 1);
-    return true;
-  }
-
-  bool add_to_wait_set_and_mapping(
-    rcl_wait_set_s & ws, const rclcpp::TimerBase::WeakPtr & weak_ptr,
-    AnyExecutableWeakRef & any_exec)
-  {
-    const rclcpp::TimerBase::SharedPtr & shr_ptr = weak_ptr.lock();
-    if (!shr_ptr) {
-      // got deleted, we just ignore it from now on
-      return true;
-    }
-
-    auto handle_shr_ptr = shr_ptr->get_timer_handle();
-    any_exec.rcl_handle_shr_ptr = handle_shr_ptr;
-    timer_map.emplace_back(&any_exec);
-
-    size_t idx;
-
-    if (rcl_wait_set_add_timer(&ws, handle_shr_ptr.get(), &idx) != RCL_RET_OK) {
-      RCUTILS_LOG_ERROR_NAMED(
-        "rclcpp",
-        "Couldn't add timer to wait set: %s", rcl_get_error_string().str);
-      return false;
-    }
-
-    // verify that our mapping is correct
-    assert(idx == timer_map.size() - 1);
-    return true;
-  }
-
-  bool add_to_wait_set_and_mapping(
-    rcl_wait_set_s & ws, const rclcpp::Waitable::WeakPtr & weak_ptr,
-    AnyExecutableWeakRef & any_exec)
-  {
-    const rclcpp::Waitable::SharedPtr & waitable_ptr = weak_ptr.lock();
-    if (!waitable_ptr) {
-      // got deleted, we just ignore it from now on
-      return true;
-    }
-
-    rcl_wait_set_indices_t before_waitable;
-    before_waitable.client_index = ws.client_index;
-    before_waitable.event_index = ws.event_index;
-    before_waitable.guard_condition_index = ws.guard_condition_index;
-    before_waitable.service_index = ws.service_index;
-    before_waitable.subscription_index = ws.subscription_index;
-    before_waitable.timer_index = ws.timer_index;
-
-//     rcl_get_wait_set_indices(&ws, &before_waitable);
-    waitable_ptr->add_to_wait_set(&ws);
-
-//     rcl_wait_set_indices_t after_waitable;
-//     rcl_get_wait_set_indices(&ws, &after_waitable);
-/*
-    RCUTILS_LOG_ERROR_NAMED(
-            "rclcpp",
-            ("CBGExecutor::add_to_wait_set_and_mapping() : Adding waitalbe, ws.size_of_events : " + std::to_string(ws.event_index) + " before_waitable.size_of_events " + std::to_string(before_waitable.event_index)).c_str());*/
-
-    {
-      const size_t diff = ws.client_index - before_waitable.client_index;
-      for (size_t i = 0; i < diff; i++) {
-        clients_map.emplace_back(&any_exec);
-      }
-    }
-
-    {
-      const size_t diff = ws.event_index - before_waitable.event_index;
-      for (size_t i = 0; i < diff; i++) {
-        events_map.emplace_back(&any_exec);
-      }
-    }
-
-    {
-      const size_t diff = ws.guard_condition_index -
-        before_waitable.guard_condition_index;
-      for (size_t i = 0; i < diff; i++) {
-        guard_conditions_map.emplace_back(&any_exec);
-      }
-    }
-
-    {
-      const size_t diff = ws.service_index - before_waitable.service_index;
-      for (size_t i = 0; i < diff; i++) {
-        services_map.emplace_back(&any_exec);
-      }
-    }
-
-    {
-      const size_t diff = ws.subscription_index - before_waitable.subscription_index;
-      for (size_t i = 0; i < diff; i++) {
-        subscription_map.emplace_back(&any_exec);
-      }
-    }
-
-    {
-      const size_t diff = ws.timer_index - before_waitable.timer_index;
-      for (size_t i = 0; i < diff; i++) {
-        timer_map.emplace_back(&any_exec);
-      }
-    }
-
-    return true;
-  }
-
-  bool add_to_wait_set_and_mapping(
-    rcl_wait_set_s & ws,
-    const rclcpp::GuardCondition::WeakPtr & weak_ptr,
-    AnyExecutableWeakRef & any_exec)
-  {
-//         RCUTILS_LOG_ERROR_NAMED(
-//             "rclcpp",
-//             ("CBGExecutor::add_to_wait_set_and_mapping() : Adding GuardCondition, ws.size_of_events : " + std::to_string(ws.size_of_events)).c_str());
-
-
-    rclcpp::GuardCondition::SharedPtr shr_ptr = weak_ptr.lock();
-
-    if (!shr_ptr) {
-      return false;
-    }
-
-    const auto & gc = shr_ptr->get_rcl_guard_condition();
-
-    size_t idx = 200;
-    rcl_ret_t ret = rcl_wait_set_add_guard_condition(&ws, &gc, &idx);
-
-    if (RCL_RET_OK != ret) {
-      rclcpp::exceptions::throw_from_rcl_error(
-        ret, "failed to add guard condition to wait set");
-    }
-
-    guard_conditions_map.emplace_back(&any_exec);
-
-    // verify that our mapping is correct
-    assert(idx == guard_conditions_map.size() - 1);
-    return true;
-  }
-
-  bool add_to_wait_set_and_mapping(
-    rcl_wait_set_s & ws, ExecutableWeakPtrCache & exec_cache,
-    int16_t callback_group_idx)
-  {
-    for (AnyExecutableWeakRef & ref: exec_cache.executables) {
-      ref.callback_group_index = callback_group_idx;
-      ref.processed = false;
-
-      if (!add_to_wait_set_and_mapping(ws, ref)) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-};
-
 
 CBGExecutor::CBGExecutor(
   const rclcpp::ExecutorOptions & options,
@@ -566,8 +42,8 @@ CBGExecutor::CBGExecutor(
   interrupt_guard_condition_(std::make_shared<rclcpp::GuardCondition>(options.context)),
   shutdown_guard_condition_(std::make_shared<rclcpp::GuardCondition>(options.context)),
   context_(options.context),
-  global_executable_cache(std::make_unique<ExecutableWeakPtrCache>()),
-  nodes_executable_cache(std::make_unique<ExecutableWeakPtrCache>())
+  global_executable_cache(std::make_unique<AnyExecutableWeakRefCache>()),
+  nodes_executable_cache(std::make_unique<AnyExecutableWeakRefCache>())
 {
 
   global_executable_cache->executables.emplace_back(
@@ -594,7 +70,7 @@ CBGExecutor::CBGExecutor(
 
   rcl_ret_t ret = rcl_wait_set_init(
     &wait_set_,
-    0, 2, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0,
     context_->get_rcl_context().get(),
     allocator);
   if (RCL_RET_OK != ret) {
@@ -797,7 +273,7 @@ void CBGExecutor::sync_callback_groups()
       new_entry.callback_group = cbg;
       new_entry.scheduler = std::make_unique<CallbackGroupScheduler>();
       new_entry.callback_group_state = std::make_unique<CallbackGroupState>(*cbg);
-      new_entry.executable_cache = std::make_unique<ExecutableWeakPtrCache>();
+      new_entry.executable_cache = std::make_unique<AnyExecutableWeakRefCache>();
       new_entry.executable_cache->regenerate(*new_entry.callback_group_state);
       new_entry.callback_group_state_needs_update = false;
       next_group_data.push_back(std::move(new_entry));
@@ -819,7 +295,7 @@ void CBGExecutor::sync_callback_groups()
     nodes_executable_cache->executables.clear();
     nodes_executable_cache->executables.reserve(added_nodes_cpy.size());
 
-    // *3 ist a good estimate of how many callback_group a node may have
+    // *3 ist a rough estimate of how many callback_group a node may have
     next_group_data.reserve(added_cbgs_cpy.size() + added_nodes_cpy.size() * 3);
 
     for (const node_interfaces::NodeBaseInterface::WeakPtr & node_weak_ptr : added_nodes_cpy) {
@@ -953,35 +429,35 @@ void CBGExecutor::fill_callback_group_data(
       }
 
       switch (ready_exec.executable.index()) {
-        case 0:
+        case AnyExecutableWeakRef::ExecutableIndex::Subscription:
           {
             idle_callback_groups[ready_exec.callback_group_index]->scheduler->add_ready_executable(
               std::get<const rclcpp::SubscriptionBase::WeakPtr>(
                 ready_exec.executable));
           }
           break;
-        case 1:
+        case AnyExecutableWeakRef::ExecutableIndex::Timer:
           {
             idle_callback_groups[ready_exec.callback_group_index]->scheduler->add_ready_executable(
               std::get<const rclcpp::TimerBase::WeakPtr>(
                 ready_exec.executable));
           }
           break;
-        case 2:
+        case AnyExecutableWeakRef::ExecutableIndex::Service:
           {
             idle_callback_groups[ready_exec.callback_group_index]->scheduler->add_ready_executable(
               std::get<const rclcpp::ServiceBase::WeakPtr>(
                 ready_exec.executable));
           }
           break;
-        case 3:
+        case AnyExecutableWeakRef::ExecutableIndex::Client:
           {
             idle_callback_groups[ready_exec.callback_group_index]->scheduler->add_ready_executable(
               std::get<const rclcpp::ClientBase::WeakPtr>(
                 ready_exec.executable));
           }
           break;
-        case 4:
+        case AnyExecutableWeakRef::ExecutableIndex::Waitable:
           {
             const rclcpp::Waitable::WeakPtr & waitable_weak =
               std::get<const rclcpp::Waitable::WeakPtr>(ready_exec.executable);
@@ -992,7 +468,7 @@ void CBGExecutor::fill_callback_group_data(
             }
           }
           break;
-        case 5:
+        case AnyExecutableWeakRef::ExecutableIndex::GuardCondition:
           {
             if (ready_exec.handle_guard_condition_fun) {
               // one of our internal guard conditions triggered, lets execute the function callback for it
@@ -1088,41 +564,21 @@ void CBGExecutor::spin_once_internal(std::chrono::nanoseconds timeout)
   {
     std::lock_guard wait_lock{wait_mutex_};
 
-//         RCUTILS_LOG_ERROR_NAMED(
-//             "rclcpp",
-//             "CBGExecutor::spin_once_internal()");
-
-
     if (!rclcpp::ok(this->context_) || !spinning.load()) {
       return;
     }
 
     if (!get_next_ready_executable(any_exec)) {
-      /*
-                  RCUTILS_LOG_ERROR_NAMED(
-                      "rclcpp",
-                      "CBGExecutor::spin_once_internal() : No work ready, waiting");*/
 
       wait_for_work(timeout);
-      /*
-                  RCUTILS_LOG_ERROR_NAMED(
-                      "rclcpp",
-                      "CBGExecutor::spin_once_internal() : Wait done");*/
 
       if (!get_next_ready_executable(any_exec)) {
-//                 RCUTILS_LOG_ERROR_NAMED(
-//                     "rclcpp",
-//                     "CBGExecutor::spin_once_internal() : No work ready");
         return;
       }
     }
 
     any_exec.callback_group->can_be_taken_from().store(false);
   }
-
-//     RCUTILS_LOG_ERROR_NAMED(
-//         "rclcpp",
-//         "CBGExecutor::spin_once_internal() : Execute !");
 
   execute_any_executable(any_exec);
 
