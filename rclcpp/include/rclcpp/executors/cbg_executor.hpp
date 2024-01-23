@@ -425,7 +425,6 @@ private:
   std::mutex added_nodes_mutex_;
   std::vector<node_interfaces::NodeBaseInterface::WeakPtr> added_nodes;
 
-
   //FIXME make unique_ptr
   std::vector<CallbackGroupData> callback_groups;
 
@@ -454,8 +453,12 @@ private:
   /// The context associated with this executor.
   std::shared_ptr<rclcpp::Context> context_;
 
-  /// Stores the executables for all registered guard conditions
+  /// Stores the executables for the internal guard conditions
+  /// e.g. interrupt_guard_condition_ and shutdown_guard_condition_
   std::unique_ptr<ExecutableWeakPtrCache> global_executable_cache;
+
+  /// Stores the executables for guard conditions of the nodes
+  std::unique_ptr<ExecutableWeakPtrCache> nodes_executable_cache;
 
 
 };
