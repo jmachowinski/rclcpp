@@ -44,7 +44,7 @@ public:
 
   void clear_and_prepare(size_t expected_size)
   {
-    ready_executables.clear();
+    ready_executables.resize(0);
     ready_executables.reserve(expected_size);
     next_unprocessed_ready_executable = 0;
   }
@@ -93,10 +93,10 @@ private:
     const rclcpp::SubscriptionBase::WeakPtr & ptr)
   {
     any_executable.subscription = ptr.lock();
-
+/*
     if (any_executable.subscription) {
       //RCUTILS_LOG_INFO("Executing subscription");
-    }
+    }*/
 
     return any_executable.subscription.operator bool();
   }
@@ -120,17 +120,17 @@ private:
   bool fill_any_executable(AnyExecutable & any_executable, const rclcpp::ServiceBase::WeakPtr & ptr)
   {
     any_executable.service = ptr.lock();
-    if (any_executable.service) {
-      //RCUTILS_LOG_INFO("Executing service");
-    }
+//     if (any_executable.service) {
+//       //RCUTILS_LOG_INFO("Executing service");
+//     }
     return any_executable.service.operator bool();
   }
   bool fill_any_executable(AnyExecutable & any_executable, const rclcpp::ClientBase::WeakPtr & ptr)
   {
     any_executable.client = ptr.lock();
-    if (any_executable.client) {
-      //RCUTILS_LOG_INFO("Executing client");
-    }
+//     if (any_executable.client) {
+//       //RCUTILS_LOG_INFO("Executing client");
+//     }
     return any_executable.client.operator bool();
   }
   bool fill_any_executable(AnyExecutable & any_executable, const rclcpp::Waitable::WeakPtr & ptr)

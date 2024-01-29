@@ -15,9 +15,8 @@ struct WaitSetSize
   size_t guard_conditions = 0;
   size_t events = 0;
 
-  void addWaitable(const rclcpp::Waitable::WeakPtr & waitable_weak_ptr)
+  void addWaitable(const rclcpp::Waitable::SharedPtr & waitable_ptr)
   {
-      rclcpp::Waitable::SharedPtr waitable_ptr = waitable_weak_ptr.lock();
       if (!waitable_ptr) {
         return;
       }
@@ -49,7 +48,7 @@ struct WaitSetSize
           clients++;
           break;
         case AnyExecutableWeakRef::ExecutableIndex::Waitable:
-          addWaitable(std::get<const rclcpp::Waitable::WeakPtr>(entry.executable));
+          addWaitable(std::get<rclcpp::Waitable::SharedPtr>(entry.rcl_handle_shr_ptr));
           break;
         case AnyExecutableWeakRef::ExecutableIndex::GuardCondition:
           guard_conditions++;
@@ -59,19 +58,19 @@ struct WaitSetSize
   }
 
 
-  void addCallbackGroupState(const CallbackGroupState & state)
-  {
-    subscriptions += state.subscription_ptrs.size();
-    clients += state.client_ptrs.size();
-    services += state.service_ptrs.size();
-    timers += state.timer_ptrs.size();
-    // A callback group contains one guard condition
-    guard_conditions++;
-
-    for (const rclcpp::Waitable::WeakPtr & waitable_weak_ptr: state.waitable_ptrs) {
-      addWaitable(waitable_weak_ptr);
-    }
-  }
+//   void addCallbackGroupState(const CallbackGroupState & state)
+//   {
+//     subscriptions += state.subscription_ptrs.size();
+//     clients += state.client_ptrs.size();
+//     services += state.service_ptrs.size();
+//     timers += state.timer_ptrs.size();
+//     // A callback group contains one guard condition
+//     guard_conditions++;
+//
+//     for (const rclcpp::Waitable::WeakPtr & waitable_weak_ptr: state.waitable_ptrs) {
+//       addWaitable(waitable_weak_ptr);
+//     }
+//   }
 
   void clear_and_resize_wait_set(rcl_wait_set_s & wait_set) const
   {
@@ -81,13 +80,17 @@ struct WaitSetSize
       exceptions::throw_from_rcl_error(ret, "Couldn't clear wait set");
     }
 
-    // The size of waitables are accounted for in size of the other entities
-    ret = rcl_wait_set_resize(
-      &wait_set, subscriptions,
-      guard_conditions, timers,
-      clients, services, events);
-    if (RCL_RET_OK != ret) {
-      exceptions::throw_from_rcl_error(ret, "Couldn't resize the wait set");
+    if(wait_set.size_of_subscriptions < subscriptions || wait_set.size_of_guard_conditions < guard_conditions ||
+      wait_set.size_of_timers < timers || wait_set.size_of_clients < clients || wait_set.size_of_services < services || wait_set.size_of_events < events)
+    {
+      // The size of waitables are accounted for in size of the other entities
+      ret = rcl_wait_set_resize(
+        &wait_set, subscriptions,
+        guard_conditions, timers,
+        clients, services, events);
+      if (RCL_RET_OK != ret) {
+        exceptions::throw_from_rcl_error(ret, "Couldn't resize the wait set");
+      }
     }
   }
 };

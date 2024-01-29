@@ -612,7 +612,7 @@ take_and_do_error_handling(
 }
 
 void
-Executor::execute_subscription(rclcpp::SubscriptionBase::SharedPtr subscription)
+Executor::execute_subscription(const rclcpp::SubscriptionBase::SharedPtr &subscription)
 {
   using rclcpp::dynamic_typesupport::DynamicMessage;
 
@@ -714,13 +714,13 @@ Executor::execute_subscription(rclcpp::SubscriptionBase::SharedPtr subscription)
 }
 
 void
-Executor::execute_timer(rclcpp::TimerBase::SharedPtr timer)
+Executor::execute_timer(const rclcpp::TimerBase::SharedPtr &timer)
 {
   timer->execute_callback();
 }
 
 void
-Executor::execute_service(rclcpp::ServiceBase::SharedPtr service)
+Executor::execute_service(const rclcpp::ServiceBase::SharedPtr &service)
 {
   auto request_header = service->create_request_header();
   std::shared_ptr<void> request = service->create_request();
@@ -733,7 +733,7 @@ Executor::execute_service(rclcpp::ServiceBase::SharedPtr service)
 
 void
 Executor::execute_client(
-  rclcpp::ClientBase::SharedPtr client)
+  const rclcpp::ClientBase::SharedPtr &client)
 {
   auto request_header = client->create_request_header();
   std::shared_ptr<void> response = client->create_response();

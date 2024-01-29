@@ -292,7 +292,7 @@ void CBGExecutor::sync_callback_groups()
       added_nodes_cpy = added_nodes;
     }
 
-    nodes_executable_cache->executables.clear();
+    nodes_executable_cache->executables.resize(0);
     nodes_executable_cache->executables.reserve(added_nodes_cpy.size());
 
     // *3 ist a rough estimate of how many callback_group a node may have
@@ -341,6 +341,7 @@ void CBGExecutor::wait_for_work(
   idle_callback_groups.reserve(callback_groups.size());
 
   for (CallbackGroupData & cbg_with_data: callback_groups) {
+    // don't add anything to a waitset that has unprocessed data
     if (cbg_with_data.scheduler->has_unprocessed_executables()) {
       continue;
     }
@@ -359,14 +360,14 @@ void CBGExecutor::wait_for_work(
     if (cbg_with_data.executable_cache->cache_ditry ||
       cbg_with_data.callback_group_state_needs_update)
     {
-//             RCUTILS_LOG_INFO("Regenerating callback group");
+            RCUTILS_LOG_INFO("Regenerating callback group");
       cbg_state.update(*cbg_shr_ptr);
       cbg_with_data.executable_cache->regenerate(cbg_state);
       cbg_with_data.callback_group_state_needs_update = false;
       cbg_with_data.executable_cache->cache_ditry = false;
     }
 
-    wait_set_size.addCallbackGroupState(cbg_state);
+    wait_set_size.addExecutableWeakPtrCache(*(cbg_with_data.executable_cache));
 
     idle_callback_groups.push_back(&cbg_with_data);
   }
@@ -474,16 +475,16 @@ void CBGExecutor::fill_callback_group_data(
     };
 
   for (size_t i = 0; i < mapping.clients_map.size(); ++i) {
-    AnyExecutableWeakRef & ready_exec(*mapping.clients_map[i]);
     if (wait_set.clients[i]) {
+      AnyExecutableWeakRef & ready_exec(*mapping.clients_map[i]);
       //RCUTILS_LOG_I("Found ready client");
       add_executable(ready_exec);
     }
   }
   for (size_t i = 0; i < mapping.events_map.size(); ++i) {
-    AnyExecutableWeakRef & ready_exec(*mapping.events_map[i]);
     if (wait_set.events[i]) {
-//       RCUTILS_LOG_INFO("Found ready events");
+      AnyExecutableWeakRef & ready_exec(*mapping.events_map[i]);
+    //       RCUTILS_LOG_INFO("Found ready events");
       add_executable(ready_exec);
     }
   }
@@ -497,23 +498,23 @@ void CBGExecutor::fill_callback_group_data(
     }
   }
   for (size_t i = 0; i < mapping.services_map.size(); ++i) {
-    AnyExecutableWeakRef & ready_exec(*mapping.services_map[i]);
     if (wait_set.services[i]) {
-//       RCUTILS_LOG_INFO("Found ready services");
+      AnyExecutableWeakRef & ready_exec(*mapping.services_map[i]);
+    //       RCUTILS_LOG_INFO("Found ready services");
       add_executable(ready_exec);
     }
   }
   for (size_t i = 0; i < mapping.subscription_map.size(); ++i) {
-    AnyExecutableWeakRef & ready_exec(*mapping.subscription_map[i]);
     if (wait_set.subscriptions[i]) {
+      AnyExecutableWeakRef & ready_exec(*mapping.subscription_map[i]);
 //       RCUTILS_LOG_INFO("Found ready subscriptions");
 
       add_executable(ready_exec);
     }
   }
   for (size_t i = 0; i < mapping.timer_map.size(); ++i) {
-    AnyExecutableWeakRef & ready_exec(*mapping.timer_map[i]);
     if (wait_set.timers[i]) {
+    AnyExecutableWeakRef & ready_exec(*mapping.timer_map[i]);
 //       RCUTILS_LOG_INFO("Found ready timers");
       add_executable(ready_exec);
     }
@@ -572,9 +573,6 @@ CBGExecutor::spin_once(std::chrono::nanoseconds timeout)
 void
 CBGExecutor::execute_any_executable(AnyExecutable & any_exec)
 {
-  if (!spinning.load()) {
-    return;
-  }
   if (any_exec.timer) {
 //         RCUTILS_LOG_ERROR_NAMED("rclcpp", "Executing Timer");
     rclcpp::Executor::execute_timer(any_exec.timer);
