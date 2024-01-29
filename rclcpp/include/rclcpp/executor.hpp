@@ -470,7 +470,7 @@ public:
   RCLCPP_PUBLIC
   static void
   execute_subscription(
-    rclcpp::SubscriptionBase::SharedPtr subscription);
+    const rclcpp::SubscriptionBase::SharedPtr &subscription);
 
   /// Run timer executable.
   /**
@@ -479,7 +479,7 @@ public:
    */
   RCLCPP_PUBLIC
   static void
-  execute_timer(rclcpp::TimerBase::SharedPtr timer, const std::shared_ptr<void> & dataPtr);
+  execute_timer(const rclcpp::TimerBase::SharedPtr &timer, const std::shared_ptr<void> & dataPtr);
 
   /// Run service server executable.
   /**
@@ -488,7 +488,7 @@ public:
    */
   RCLCPP_PUBLIC
   static void
-  execute_service(rclcpp::ServiceBase::SharedPtr service);
+  execute_service(const rclcpp::ServiceBase::SharedPtr &service);
 
   /// Run service client executable.
   /**
@@ -497,7 +497,7 @@ public:
    */
   RCLCPP_PUBLIC
   static void
-  execute_client(rclcpp::ClientBase::SharedPtr client);
+  execute_client(const rclcpp::ClientBase::SharedPtr &client);
 
 protected:
   /// Block until more work becomes avilable or timeout is reached.

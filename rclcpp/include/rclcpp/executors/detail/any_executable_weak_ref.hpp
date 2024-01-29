@@ -15,6 +15,8 @@ namespace rclcpp::executors
  */
 struct AnyExecutableWeakRef
 {
+  AnyExecutableWeakRef() = default;
+
   AnyExecutableWeakRef(const rclcpp::SubscriptionBase::WeakPtr & p, int16_t callback_group_index)
   : executable(p),
     callback_group_index(callback_group_index)

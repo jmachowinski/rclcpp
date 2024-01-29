@@ -68,8 +68,8 @@ public:
     Executer executor;
     for (unsigned int i = 0u; i < kNumberOfNodes; i++) {
       executor.add_node(nodes[i]);
-      publishers[i]->publish(empty_msgs);
-      executor.spin_some(100ms);
+//       publishers[i]->publish(empty_msgs);
+//       executor.spin_some(100ms);
     }
 
     callback_count = 0;
@@ -144,6 +144,11 @@ BENCHMARK_F(PerformanceTestExecutor, single_thread_executor_spin_some)(benchmark
   executor_spin_some<rclcpp::executors::SingleThreadedExecutor>(st);
 }
 
+BENCHMARK_F(PerformanceTestExecutor, static_single_thread_executor_spin_some)(benchmark::State & st)
+{
+  executor_spin_some<rclcpp::executors::StaticSingleThreadedExecutor>(st);
+}
+
 BENCHMARK_F(PerformanceTestExecutor, multi_thread_executor_spin_some)(benchmark::State & st)
 {
   executor_spin_some<rclcpp::executors::MultiThreadedExecutor>(st);
@@ -212,7 +217,7 @@ public:
     Executer executor;
     for (unsigned int i = 0u; i < kNumberOfNodes; i++) {
       executor.add_node(nodes[i]);
-      executor.spin_some(100ms);
+//       executor.spin_some(100ms);
     }
 
     callback_count = 0;
@@ -246,6 +251,13 @@ BENCHMARK_F(
   single_thread_executor_spin_some)(benchmark::State & st)
 {
   executor_spin_some<rclcpp::executors::SingleThreadedExecutor>(st);
+}
+
+BENCHMARK_F(
+  CascadedPerformanceTestExecutor,
+  static_single_thread_executor_spin_some)(benchmark::State & st)
+{
+  executor_spin_some<rclcpp::executors::StaticSingleThreadedExecutor>(st);
 }
 
 BENCHMARK_F(CascadedPerformanceTestExecutor, multi_thread_executor_spin_some)(benchmark::State & st)
@@ -564,7 +576,7 @@ public:
 
 
 BENCHMARK_F(SharedPtrHolder,
-  shared_ptr_ref)(benchmark::State & st)
+  shared_ptr_use_cnt)(benchmark::State & st)
 {
     for (auto _ : st) {
     (void)_;
@@ -582,6 +594,65 @@ BENCHMARK_F(SharedPtrHolder,
       std::shared_ptr<std::string> ptr = weak_ptr.lock();
       benchmark::DoNotOptimize(ptr);
 
+    }
+}
+
+class Foo
+{
+public:
+  Foo(size_t i) : num(i) {};
+  Foo() : num(0) {};
+
+  ~Foo()
+  {
+  }
+
+  size_t num = 0;
+  std::shared_ptr<size_t> foo_ptr;
+  rclcpp::AnyExecutable exec;
+};
+
+BENCHMARK_F(SharedPtrHolder,
+  clear_std_vector)(benchmark::State & st)
+{
+    const size_t size = 80;
+
+    std::vector<Foo> tmp;
+    tmp.reserve(size);
+
+    for (auto _ : st) {
+    (void)_;
+      tmp.clear();
+      tmp.reserve(size);
+
+      for(size_t i = 0; i < size; i++ )
+      {
+        tmp.push_back(i);
+      }
+
+      benchmark::DoNotOptimize(tmp);
+    }
+}
+
+BENCHMARK_F(SharedPtrHolder,
+  resize_zero_std_vector)(benchmark::State & st)
+{
+    const size_t size = 80;
+
+    std::vector<Foo> tmp;
+    tmp.reserve(size);
+
+    for (auto _ : st) {
+    (void)_;
+      tmp.resize(0);
+      tmp.reserve(size);
+
+      for(size_t i = 0; i < size; i++ )
+      {
+        tmp.push_back(i);
+      }
+
+      benchmark::DoNotOptimize(tmp);
     }
 }
 
