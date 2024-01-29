@@ -122,7 +122,7 @@ CBGExecutor::~CBGExecutor()
 
 }
 
-void CallbackGroupScheduler::prepare(const CallbackGroupState & cb_elements)
+void CallbackGroupScheduler::clear_and_prepare(const CallbackGroupState & cb_elements)
 {
   ready_timers.clear_and_prepare(cb_elements.timer_ptrs.size());
   ready_subscriptions.clear_and_prepare(cb_elements.subscription_ptrs.size());
@@ -399,7 +399,7 @@ void CBGExecutor::wait_for_work(
       static_cast<int16_t>(idx));
 
     // setup the groups for the next round
-    cbg_with_data->scheduler->prepare(callback_group_state);
+    cbg_with_data->scheduler->clear_and_prepare(callback_group_state);
   }
 
   rcl_ret_t status =

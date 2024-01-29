@@ -150,11 +150,21 @@ private:
 class CallbackGroupScheduler
 {
 public:
-  CallbackGroupScheduler()
+
+  enum SchedulingPolicy
+  {
+    // Execute all ready events in priority order
+    PrioritizedFistInFirstOut,
+    // Only execute the highest ready event
+    Prioritized,
+  };
+
+  CallbackGroupScheduler(SchedulingPolicy sched_policy = SchedulingPolicy::PrioritizedFistInFirstOut) :
+    sched_policy(sched_policy)
   {
   }
 
-  void prepare(const CallbackGroupState & cb_elements);
+  void clear_and_prepare(const CallbackGroupState & cb_elements);
 
   void add_ready_executable(const rclcpp::SubscriptionBase::WeakPtr & executable);
   void add_ready_executable(const rclcpp::ServiceBase::WeakPtr & executable);
@@ -181,6 +191,8 @@ private:
   ExecutionGroup<rclcpp::ServiceBase::WeakPtr> ready_services;
   ExecutionGroup<rclcpp::ClientBase::WeakPtr> ready_clients;
   ExecutionGroup<rclcpp::Waitable::WeakPtr> ready_waitables;
+
+  SchedulingPolicy sched_policy;
 };
 
 struct AnyExecutableWeakRefCache;
