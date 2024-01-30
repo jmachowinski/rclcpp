@@ -33,7 +33,7 @@ struct WaitSetSize
   {
     for(const AnyExecutableWeakRef &entry : cache.executables)
     {
-      switch(entry.executable.index())
+      switch(entry.rcl_handle_shr_ptr.index())
       {
         case AnyExecutableWeakRef::ExecutableIndex::Subscription:
           subscriptions++;

@@ -165,23 +165,23 @@ bool CallbackGroupScheduler::has_unprocessed_executables()
 }
 
 
-void CallbackGroupScheduler::add_ready_subscription(AnyExecutableWeakRef & executable)
+void CallbackGroupScheduler::add_ready_executable(SubscriberRef & executable)
 {
   ready_subscriptions.add_ready_executable(executable);
 }
-void CallbackGroupScheduler::add_ready_service(AnyExecutableWeakRef & executable)
+void CallbackGroupScheduler::add_ready_executable(ServiceRef & executable)
 {
   ready_services.add_ready_executable(executable);
 }
-void CallbackGroupScheduler::add_ready_timer(AnyExecutableWeakRef & executable)
+void CallbackGroupScheduler::add_ready_executable(TimerRef & executable)
 {
   ready_timers.add_ready_executable(executable);
 }
-void CallbackGroupScheduler::add_ready_client(AnyExecutableWeakRef & executable)
+void CallbackGroupScheduler::add_ready_executable(ClientRef & executable)
 {
   ready_clients.add_ready_executable(executable);
 }
-void CallbackGroupScheduler::add_ready_waitable(AnyExecutableWeakRef & executable)
+void CallbackGroupScheduler::add_ready_executable(WaitableRef & executable)
 {
   ready_waitables.add_ready_executable(executable);
 }
@@ -419,107 +419,107 @@ void CBGExecutor::wait_for_work(
   //at this point we don't need the wait_set_ any more
 }
 
-void CBGExecutor::fill_callback_group_data(
-  rcl_wait_set_s & wait_set,
-  const std::vector<CallbackGroupData *> idle_callback_groups, const RCLToRCLCPPMap & mapping)
-{
-  auto add_executable = [&wait_set, &idle_callback_groups](AnyExecutableWeakRef & ready_exec)
-    {
-      if (ready_exec.processed) {
-        return;
-      }
-
-      switch (ready_exec.rcl_handle_shr_ptr.index()) {
-        case AnyExecutableWeakRef::ExecutableIndex::Subscription:
-          {
-            idle_callback_groups[ready_exec.callback_group_index]->scheduler->add_ready_subscription(ready_exec);
-          }
-          break;
-        case AnyExecutableWeakRef::ExecutableIndex::Timer:
-          {
-            idle_callback_groups[ready_exec.callback_group_index]->scheduler->add_ready_timer(ready_exec);
-          }
-          break;
-        case AnyExecutableWeakRef::ExecutableIndex::Service:
-          {
-            idle_callback_groups[ready_exec.callback_group_index]->scheduler->add_ready_service(ready_exec);
-          }
-          break;
-        case AnyExecutableWeakRef::ExecutableIndex::Client:
-          {
-            idle_callback_groups[ready_exec.callback_group_index]->scheduler->add_ready_client(ready_exec);
-          }
-          break;
-        case AnyExecutableWeakRef::ExecutableIndex::Waitable:
-          {
-            rclcpp::Waitable::SharedPtr &waitable =  std::get<rclcpp::Waitable::SharedPtr>(ready_exec.rcl_handle_shr_ptr);
-
-            if (waitable && waitable->is_ready(&wait_set)) {
-              idle_callback_groups[ready_exec.callback_group_index]->scheduler->add_ready_waitable(ready_exec);
-            }
-          }
-          break;
-        case AnyExecutableWeakRef::ExecutableIndex::GuardCondition:
-          {
-            if (ready_exec.handle_guard_condition_fun) {
-              // one of our internal guard conditions triggered, lets execute the function callback for it
-              ready_exec.handle_guard_condition_fun();
-            }
-          }
-          break;
-        case AnyExecutableWeakRef::ExecutableIndex::Deleted:
-          break;
-      }
-
-      ready_exec.processed = true;
-    };
-
-  for (size_t i = 0; i < mapping.clients_map.size(); ++i) {
-    if (wait_set.clients[i]) {
-      AnyExecutableWeakRef & ready_exec(*mapping.clients_map[i]);
-      //RCUTILS_LOG_I("Found ready client");
-      add_executable(ready_exec);
-    }
-  }
-  for (size_t i = 0; i < mapping.events_map.size(); ++i) {
-    if (wait_set.events[i]) {
-      AnyExecutableWeakRef & ready_exec(*mapping.events_map[i]);
-    //       RCUTILS_LOG_INFO("Found ready events");
-      add_executable(ready_exec);
-    }
-  }
-  for (size_t i = 0; i < mapping.guard_conditions_map.size(); ++i) {
-    if (wait_set.guard_conditions[i]) {
-//       RCLCPP_INFO_STREAM(rclcpp::get_logger("cbg_executor"), "Found ready guard_conditions : " << wait_set.guard_conditions[i] << " at idx " << i );
-//       RCUTILS_LOG_INFO("Found ready guard_conditions");
-      AnyExecutableWeakRef & ready_exec(*mapping.guard_conditions_map[i]);
-//       RCLCPP_INFO_STREAM(rclcpp::get_logger("cbg_executor"), "AnyExecutableWeakRef is : " << &ready_exec);
-      add_executable(ready_exec);
-    }
-  }
-  for (size_t i = 0; i < mapping.services_map.size(); ++i) {
-    if (wait_set.services[i]) {
-      AnyExecutableWeakRef & ready_exec(*mapping.services_map[i]);
-    //       RCUTILS_LOG_INFO("Found ready services");
-      add_executable(ready_exec);
-    }
-  }
-  for (size_t i = 0; i < mapping.subscription_map.size(); ++i) {
-    if (wait_set.subscriptions[i]) {
-      AnyExecutableWeakRef & ready_exec(*mapping.subscription_map[i]);
-//       RCUTILS_LOG_INFO("Found ready subscriptions");
-
-      add_executable(ready_exec);
-    }
-  }
-  for (size_t i = 0; i < mapping.timer_map.size(); ++i) {
-    if (wait_set.timers[i]) {
-    AnyExecutableWeakRef & ready_exec(*mapping.timer_map[i]);
-//       RCUTILS_LOG_INFO("Found ready timers");
-      add_executable(ready_exec);
-    }
-  }
-}
+// void CBGExecutor::fill_callback_group_data(
+//   rcl_wait_set_s & wait_set,
+//   const std::vector<CallbackGroupData *> idle_callback_groups, const RCLToRCLCPPMap & mapping)
+// {
+//   auto add_executable = [&wait_set, &idle_callback_groups](AnyExecutableWeakRef & ready_exec)
+//     {
+//       if (ready_exec.processed) {
+//         return;
+//       }
+//
+//       switch (ready_exec.rcl_handle_shr_ptr.index()) {
+//         case AnyExecutableWeakRef::ExecutableIndex::Subscription:
+//           {
+//             idle_callback_groups[ready_exec.callback_group_index]->scheduler->add_ready_subscription(ready_exec);
+//           }
+//           break;
+//         case AnyExecutableWeakRef::ExecutableIndex::Timer:
+//           {
+//             idle_callback_groups[ready_exec.callback_group_index]->scheduler->add_ready_timer(ready_exec);
+//           }
+//           break;
+//         case AnyExecutableWeakRef::ExecutableIndex::Service:
+//           {
+//             idle_callback_groups[ready_exec.callback_group_index]->scheduler->add_ready_service(ready_exec);
+//           }
+//           break;
+//         case AnyExecutableWeakRef::ExecutableIndex::Client:
+//           {
+//             idle_callback_groups[ready_exec.callback_group_index]->scheduler->add_ready_client(ready_exec);
+//           }
+//           break;
+//         case AnyExecutableWeakRef::ExecutableIndex::Waitable:
+//           {
+//             rclcpp::Waitable::SharedPtr &waitable =  std::get<rclcpp::Waitable::SharedPtr>(ready_exec.rcl_handle_shr_ptr);
+//
+//             if (waitable && waitable->is_ready(&wait_set)) {
+//               idle_callback_groups[ready_exec.callback_group_index]->scheduler->add_ready_waitable(ready_exec);
+//             }
+//           }
+//           break;
+//         case AnyExecutableWeakRef::ExecutableIndex::GuardCondition:
+//           {
+//             if (ready_exec.handle_guard_condition_fun) {
+//               // one of our internal guard conditions triggered, lets execute the function callback for it
+//               ready_exec.handle_guard_condition_fun();
+//             }
+//           }
+//           break;
+//         case AnyExecutableWeakRef::ExecutableIndex::Deleted:
+//           break;
+//       }
+//
+//       ready_exec.processed = true;
+//     };
+//
+//   for (size_t i = 0; i < mapping.clients_map.size(); ++i) {
+//     if (wait_set.clients[i]) {
+//       AnyExecutableWeakRef & ready_exec(*mapping.clients_map[i]);
+//       //RCUTILS_LOG_I("Found ready client");
+//       add_executable(ready_exec);
+//     }
+//   }
+//   for (size_t i = 0; i < mapping.events_map.size(); ++i) {
+//     if (wait_set.events[i]) {
+//       AnyExecutableWeakRef & ready_exec(*mapping.events_map[i]);
+//     //       RCUTILS_LOG_INFO("Found ready events");
+//       add_executable(ready_exec);
+//     }
+//   }
+//   for (size_t i = 0; i < mapping.guard_conditions_map.size(); ++i) {
+//     if (wait_set.guard_conditions[i]) {
+// //       RCLCPP_INFO_STREAM(rclcpp::get_logger("cbg_executor"), "Found ready guard_conditions : " << wait_set.guard_conditions[i] << " at idx " << i );
+// //       RCUTILS_LOG_INFO("Found ready guard_conditions");
+//       AnyExecutableWeakRef & ready_exec(*mapping.guard_conditions_map[i]);
+// //       RCLCPP_INFO_STREAM(rclcpp::get_logger("cbg_executor"), "AnyExecutableWeakRef is : " << &ready_exec);
+//       add_executable(ready_exec);
+//     }
+//   }
+//   for (size_t i = 0; i < mapping.services_map.size(); ++i) {
+//     if (wait_set.services[i]) {
+//       AnyExecutableWeakRef & ready_exec(*mapping.services_map[i]);
+//     //       RCUTILS_LOG_INFO("Found ready services");
+//       add_executable(ready_exec);
+//     }
+//   }
+//   for (size_t i = 0; i < mapping.subscription_map.size(); ++i) {
+//     if (wait_set.subscriptions[i]) {
+//       AnyExecutableWeakRef & ready_exec(*mapping.subscription_map[i]);
+// //       RCUTILS_LOG_INFO("Found ready subscriptions");
+//
+//       add_executable(ready_exec);
+//     }
+//   }
+//   for (size_t i = 0; i < mapping.timer_map.size(); ++i) {
+//     if (wait_set.timers[i]) {
+//     AnyExecutableWeakRef & ready_exec(*mapping.timer_map[i]);
+// //       RCUTILS_LOG_INFO("Found ready timers");
+//       add_executable(ready_exec);
+//     }
+//   }
+// }
 
 void
 CBGExecutor::run(size_t this_thread_number)
@@ -575,7 +575,7 @@ CBGExecutor::execute_any_executable(AnyExecutable & any_exec)
 {
   if (any_exec.timer) {
 //         RCUTILS_LOG_ERROR_NAMED("rclcpp", "Executing Timer");
-    rclcpp::Executor::execute_timer(any_exec.timer);
+    rclcpp::Executor::execute_timer(any_exec.timer, any_exec.data);
   }
   if (any_exec.subscription) {
 //         RCUTILS_LOG_ERROR_NAMED("rclcpp", "Executing subscription");
@@ -732,7 +732,7 @@ CBGExecutor::spin()
 void
 CBGExecutor::add_callback_group(
   rclcpp::CallbackGroup::SharedPtr group_ptr,
-  rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node_ptr,
+  rclcpp::node_interfaces::NodeBaseInterface::SharedPtr /*node_ptr*/,
   bool notify)
 {
   {

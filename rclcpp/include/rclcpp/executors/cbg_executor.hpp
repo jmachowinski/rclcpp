@@ -22,6 +22,7 @@
 #include <unordered_map>
 
 #include "rclcpp/executors/detail/any_executable_weak_ref.hpp"
+#include "rclcpp/executors/detail/weak_executable_with_rcl_handle.hpp"
 #include "rclcpp/executor.hpp"
 #include "rclcpp/executors/callback_group_state.hpp"
 #include "rclcpp/macros.hpp"
@@ -33,7 +34,7 @@ namespace rclcpp
 namespace executors
 {
 
-template<class Executable>
+template<class ExecutableRef>
 class ExecutionGroup
 {
 public:
@@ -44,15 +45,14 @@ public:
 
   void clear_and_prepare(size_t expected_size)
   {
-    ready_executables.resize(0);
+    ready_executables.clear();
     ready_executables.reserve(expected_size);
     next_unprocessed_ready_executable = 0;
   }
 
-  void add_ready_executable(AnyExecutableWeakRef & e)
+  void add_ready_executable(ExecutableRef & e)
   {
     ready_executables.push_back(&e);
-//     ready_executables.push_back(std::get<const Executable>(e.executable));
   }
 
   bool has_unprocessed_executables()
@@ -76,7 +76,7 @@ public:
     {
       const auto & ready_executable = ready_executables[next_unprocessed_ready_executable];
 
-      if (fill_any_executable(any_executable, std::get<const Executable>(ready_executable->executable))) {
+      if (fill_any_executable(any_executable, ready_executable->executable)) {
         // mark the current element as processed
         next_unprocessed_ready_executable++;
 
@@ -110,7 +110,7 @@ private:
           return false;
         }
 
-//         any_executable.data = *data;
+        any_executable.data = *data;
 
         return true;
       //RCUTILS_LOG_INFO("Executing timer");
@@ -144,7 +144,7 @@ private:
     return false;
   }
 
-  std::vector<AnyExecutableWeakRef *> ready_executables;
+  std::vector<ExecutableRef *> ready_executables;
   size_t next_unprocessed_ready_executable = 0;
 
 };
@@ -168,11 +168,11 @@ public:
 
   void clear_and_prepare(const CallbackGroupState & cb_elements);
 
-  void add_ready_timer(AnyExecutableWeakRef & executable);
-  void add_ready_subscription(AnyExecutableWeakRef & executable);
-  void add_ready_service(AnyExecutableWeakRef & executable);
-  void add_ready_client(AnyExecutableWeakRef & executable);
-  void add_ready_waitable(AnyExecutableWeakRef & executable);
+  void add_ready_executable(TimerRef & executable);
+  void add_ready_executable(SubscriberRef & executable);
+  void add_ready_executable(ServiceRef & executable);
+  void add_ready_executable(ClientRef & executable);
+  void add_ready_executable(WaitableRef & executable);
 
   enum Priorities
   {
@@ -188,11 +188,11 @@ public:
   bool has_unprocessed_executables();
 
 private:
-  ExecutionGroup<rclcpp::TimerBase::WeakPtr> ready_timers;
-  ExecutionGroup<rclcpp::SubscriptionBase::WeakPtr> ready_subscriptions;
-  ExecutionGroup<rclcpp::ServiceBase::WeakPtr> ready_services;
-  ExecutionGroup<rclcpp::ClientBase::WeakPtr> ready_clients;
-  ExecutionGroup<rclcpp::Waitable::WeakPtr> ready_waitables;
+  ExecutionGroup<TimerRef> ready_timers;
+  ExecutionGroup<SubscriberRef> ready_subscriptions;
+  ExecutionGroup<ServiceRef> ready_services;
+  ExecutionGroup<ClientRef> ready_clients;
+  ExecutionGroup<WaitableRef> ready_waitables;
 
   SchedulingPolicy sched_policy;
 };
