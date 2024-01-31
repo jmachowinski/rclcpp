@@ -161,10 +161,10 @@ bool CallbackGroupScheduler::get_unprocessed_executable(
 
 bool CallbackGroupScheduler::has_unprocessed_executables()
 {
-  return ready_clients.has_unprocessed_executables() ||
-         ready_services.has_unprocessed_executables() ||
-         ready_subscriptions.has_unprocessed_executables() ||
+  return ready_subscriptions.has_unprocessed_executables() ||
          ready_timers.has_unprocessed_executables() ||
+         ready_clients.has_unprocessed_executables() ||
+         ready_services.has_unprocessed_executables() ||
          ready_waitables.has_unprocessed_executables();
 }
 
@@ -472,7 +472,7 @@ CBGExecutor::run(size_t this_thread_number)
     }
     else
     {
-      //some other thread is blocking the wait for function.
+      //some other thread is blocking the wait_for_work function.
 
       if(had_work)
       {
@@ -487,6 +487,7 @@ CBGExecutor::run(size_t this_thread_number)
         }
       }
 
+      had_work = false;
       std::unique_lock lk(conditional_mutex);
       work_ready_conditional.wait(lk);
 
@@ -507,8 +508,6 @@ void CBGExecutor::spin_once_internal(std::chrono::nanoseconds timeout)
 {
   rclcpp::AnyExecutable any_exec;
   {
-    std::lock_guard wait_lock{wait_mutex_};
-
     if (!rclcpp::ok(this->context_) || !spinning.load()) {
       return;
     }
@@ -586,26 +585,19 @@ bool CBGExecutor::collect_and_execute_ready_events(
   auto cur_time = start;
 
   // collect any work, that is already ready
-  wait_for_work(std::chrono::nanoseconds::zero(), true);
+//   wait_for_work(std::chrono::nanoseconds::zero(), true);
 
   bool work_available = false;
   bool got_work_since_collect = false;
-
+  bool first_collect = true;
   bool had_work = false;
 
-  while (spinning && cur_time - start <= max_duration) {
+  while (rclcpp::ok(this->context_) && spinning && cur_time - start <= max_duration) {
     rclcpp::AnyExecutable any_exec;
     {
-      std::lock_guard wait_lock{wait_mutex_};
-
 //             RCUTILS_LOG_ERROR_NAMED(
 //                 "rclcpp",
 //                 "CBGExecutor::collect_and_execute_ready_events()");
-
-
-      if (!rclcpp::ok(this->context_) || !spinning.load()) {
-        return false;
-      }
 
       if (!get_next_ready_executable(any_exec)) {
 
@@ -617,15 +609,16 @@ bool CBGExecutor::collect_and_execute_ready_events(
     }
 
     if (!work_available) {
-      if (!recollect_if_no_work_available) {
+      if (!first_collect && !recollect_if_no_work_available) {
         // we are done
         return had_work;
       }
 
-      if (got_work_since_collect) {
+      if (first_collect || got_work_since_collect) {
         // collect any work, that is already ready
         wait_for_work(std::chrono::nanoseconds::zero(), true);
 
+        first_collect = false;
         got_work_since_collect = false;
         continue;
       }
