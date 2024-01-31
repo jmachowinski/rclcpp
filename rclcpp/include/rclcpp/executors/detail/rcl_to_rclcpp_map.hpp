@@ -5,96 +5,7 @@
 namespace rclcpp::executors
 {
 
-/// Helper class to compute the size of a waitset
-struct WaitSetSize
-{
-  size_t subscriptions = 0;
-  size_t clients = 0;
-  size_t services = 0;
-  size_t timers = 0;
-  size_t guard_conditions = 0;
-  size_t events = 0;
-
-  void addWaitable(const rclcpp::Waitable::SharedPtr & waitable_ptr)
-  {
-      if (!waitable_ptr) {
-        return;
-      }
-
-      subscriptions += waitable_ptr->get_number_of_ready_subscriptions();
-      clients += waitable_ptr->get_number_of_ready_clients();
-      services += waitable_ptr->get_number_of_ready_services();
-      timers += waitable_ptr->get_number_of_ready_timers();
-      guard_conditions += waitable_ptr->get_number_of_ready_guard_conditions();
-      events += waitable_ptr->get_number_of_ready_events();
-  }
-
-  void addExecutableWeakPtrCache(const AnyExecutableWeakRefCache & cache)
-  {
-    for(const AnyExecutableWeakRef &entry : cache.executables)
-    {
-      switch(entry.rcl_handle_shr_ptr.index())
-      {
-        case AnyExecutableWeakRef::ExecutableIndex::Subscription:
-          subscriptions++;
-          break;
-        case AnyExecutableWeakRef::ExecutableIndex::Timer:
-          timers++;
-          break;
-        case AnyExecutableWeakRef::ExecutableIndex::Service:
-          services++;
-          break;
-        case AnyExecutableWeakRef::ExecutableIndex::Client:
-          clients++;
-          break;
-        case AnyExecutableWeakRef::ExecutableIndex::Waitable:
-          addWaitable(std::get<rclcpp::Waitable::SharedPtr>(entry.rcl_handle_shr_ptr));
-          break;
-        case AnyExecutableWeakRef::ExecutableIndex::GuardCondition:
-          guard_conditions++;
-          break;
-      }
-    }
-  }
-
-
-//   void addCallbackGroupState(const CallbackGroupState & state)
-//   {
-//     subscriptions += state.subscription_ptrs.size();
-//     clients += state.client_ptrs.size();
-//     services += state.service_ptrs.size();
-//     timers += state.timer_ptrs.size();
-//     // A callback group contains one guard condition
-//     guard_conditions++;
-//
-//     for (const rclcpp::Waitable::WeakPtr & waitable_weak_ptr: state.waitable_ptrs) {
-//       addWaitable(waitable_weak_ptr);
-//     }
-//   }
-
-  void clear_and_resize_wait_set(rcl_wait_set_s & wait_set) const
-  {
-    // clear wait set
-    rcl_ret_t ret = rcl_wait_set_clear(&wait_set);
-    if (ret != RCL_RET_OK) {
-      exceptions::throw_from_rcl_error(ret, "Couldn't clear wait set");
-    }
-
-    if(wait_set.size_of_subscriptions < subscriptions || wait_set.size_of_guard_conditions < guard_conditions ||
-      wait_set.size_of_timers < timers || wait_set.size_of_clients < clients || wait_set.size_of_services < services || wait_set.size_of_events < events)
-    {
-      // The size of waitables are accounted for in size of the other entities
-      ret = rcl_wait_set_resize(
-        &wait_set, subscriptions,
-        guard_conditions, timers,
-        clients, services, events);
-      if (RCL_RET_OK != ret) {
-        exceptions::throw_from_rcl_error(ret, "Couldn't resize the wait set");
-      }
-    }
-  }
-};
-
+/*
 
 struct RCLToRCLCPPMap
 {
@@ -365,5 +276,5 @@ struct RCLToRCLCPPMap
   }
 
 };
-
+*/
 }

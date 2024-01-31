@@ -34,6 +34,13 @@ namespace rclcpp
 namespace executors
 {
 
+struct AnyExecutableCbg
+{
+  std::function<void()> execute_function;
+
+  bool more_executables_ready_in_cbg = false;
+};
+
 template<class ExecutableRef>
 class ExecutionGroup
 {
@@ -68,7 +75,24 @@ public:
     }
     return false;
   }
+  bool get_unprocessed_executable(AnyExecutableCbg & any_executable)
+  {
+    for (; next_unprocessed_ready_executable < ready_executables.size();
+      next_unprocessed_ready_executable++)
+    {
+      const auto & ready_executable = ready_executables[next_unprocessed_ready_executable];
 
+      if (fill_any_executable(any_executable, ready_executable->executable)) {
+
+        // mark the current element as processed
+        next_unprocessed_ready_executable++;
+
+        return true;
+      }
+    }
+
+    return false;
+  }
   bool get_unprocessed_executable(AnyExecutable & any_executable)
   {
     for (; next_unprocessed_ready_executable < ready_executables.size();
@@ -99,6 +123,89 @@ private:
     }*/
 
     return any_executable.subscription.operator bool();
+  }
+
+  bool fill_any_executable(
+    AnyExecutableCbg & any_executable,
+    const rclcpp::SubscriptionBase::WeakPtr & ptr)
+  {
+    auto shr_ptr = ptr.lock();
+    if(!shr_ptr)
+    {
+      return false;
+    }
+    any_executable.execute_function = [shr_ptr = std::move(shr_ptr)] () {
+      rclcpp::Executor::execute_subscription(shr_ptr);
+    };
+
+    return true;
+  }
+  bool fill_any_executable(AnyExecutableCbg & any_executable, const rclcpp::TimerBase::WeakPtr & ptr)
+  {
+    auto shr_ptr = ptr.lock();
+    if(!shr_ptr)
+    {
+      return false;
+    }
+    auto data = shr_ptr->call();
+    if (!data) {
+      // timer was cancelled, skip it.
+      return false;
+    }
+
+    any_executable.execute_function = [shr_ptr = std::move(shr_ptr), data = (*data)] () {
+      rclcpp::Executor::execute_timer(shr_ptr, data);
+    };
+
+    return true;
+  }
+  bool fill_any_executable(
+    AnyExecutableCbg & any_executable,
+    const rclcpp::ServiceBase::WeakPtr & ptr)
+  {
+    auto shr_ptr = ptr.lock();
+    if(!shr_ptr)
+    {
+      return false;
+    }
+    any_executable.execute_function = [shr_ptr = std::move(shr_ptr)] () {
+      rclcpp::Executor::execute_service(shr_ptr);
+    };
+
+    return true;
+  }
+  bool fill_any_executable(
+    AnyExecutableCbg & any_executable,
+    const rclcpp::ClientBase::WeakPtr & ptr)
+  {
+    auto shr_ptr = ptr.lock();
+    if(!shr_ptr)
+    {
+      return false;
+    }
+    any_executable.execute_function = [shr_ptr = std::move(shr_ptr)] () {
+      rclcpp::Executor::execute_client(shr_ptr);
+    };
+
+    return true;
+  }
+  bool fill_any_executable(
+    AnyExecutableCbg & any_executable,
+    const rclcpp::Waitable::WeakPtr & ptr)
+  {
+    auto shr_ptr = ptr.lock();
+    if(!shr_ptr)
+    {
+      return false;
+    }
+    auto data = shr_ptr->take_data();
+
+    any_executable.execute_function = [shr_ptr = std::move(shr_ptr), data = std::move(data)] () {
+      std::shared_ptr<void> cpy = std::move(data);
+      shr_ptr->execute(cpy);
+    };
+
+    return true;
   }
   bool fill_any_executable(AnyExecutable & any_executable, const rclcpp::TimerBase::WeakPtr & ptr)
   {
@@ -166,7 +273,7 @@ public:
   {
   }
 
-  void clear_and_prepare(const CallbackGroupState & cb_elements);
+  void clear_and_prepare(const size_t max_timer, const size_t max_subs, const size_t max_services, const size_t max_clients, const size_t max_waitables);
 
   void add_ready_executable(TimerRef & executable);
   void add_ready_executable(SubscriberRef & executable);
@@ -196,9 +303,6 @@ private:
 
   SchedulingPolicy sched_policy;
 };
-
-struct AnyExecutableWeakRefCache;
-struct RCLToRCLCPPMap;
 
 class CBGExecutor : public rclcpp::Executor
 {
@@ -387,20 +491,12 @@ protected:
     CallbackGroup::WeakPtr callback_group;
 
     std::unique_ptr<CallbackGroupScheduler> scheduler;
-    std::unique_ptr<CallbackGroupState> callback_group_state;
-    std::unique_ptr<AnyExecutableWeakRefCache> executable_cache;
-
-    bool callback_group_state_needs_update = false;
+    std::unique_ptr<WeakExecutableWithRclHandleCache> executable_cache;
   };
 
   bool
   get_next_ready_executable(AnyExecutable & any_executable);
 
-
-  void fill_callback_group_data(
-    rcl_wait_set_s & wait_set,
-    const std::vector<CallbackGroupData *> idle_callback_groups,
-    const RCLToRCLCPPMap & mapping);
 
 private:
   void sync_callback_groups();
@@ -447,11 +543,13 @@ private:
 
   /// Stores the executables for the internal guard conditions
   /// e.g. interrupt_guard_condition_ and shutdown_guard_condition_
-  std::unique_ptr<AnyExecutableWeakRefCache> global_executable_cache;
+  std::unique_ptr<WeakExecutableWithRclHandleCache> global_executable_cache;
 
   /// Stores the executables for guard conditions of the nodes
-  std::unique_ptr<AnyExecutableWeakRefCache> nodes_executable_cache;
+  std::unique_ptr<WeakExecutableWithRclHandleCache> nodes_executable_cache;
 
+  std::mutex conditional_mutex;
+  std::condition_variable work_ready_conditional;
 
 };
 
