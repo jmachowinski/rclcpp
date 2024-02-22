@@ -41,6 +41,7 @@
 #include "test_msgs/msg/empty.hpp"
 #include "rosgraph_msgs/msg/clock.hpp"
 #include "rclcpp/executors/cbg_executor.hpp"
+#include "rclcpp/executors/events_cbg_executor.hpp"
 #include "test_msgs/srv/empty.hpp"
 
 using namespace std::chrono_literals;
@@ -94,6 +95,7 @@ using ExecutorTypes =
   rclcpp::executors::MultiThreadedExecutor,
   rclcpp::executors::StaticSingleThreadedExecutor,
   rclcpp::executors::CBGExecutor,
+  rclcpp::executors::EventsCBGExecutor,
   rclcpp::experimental::executors::EventsExecutor>;
 
 class ExecutorTypeNames
@@ -117,6 +119,10 @@ public:
 
     if (std::is_same<T, rclcpp::executors::CBGExecutor>()) {
       return "CallbackGroupExecutor";
+    }
+
+    if (std::is_same<T, rclcpp::executors::EventsCBGExecutor>()) {
+      return "CallbackGroupEventsExecutor";
     }
 
     if (std::is_same<T, rclcpp::experimental::executors::EventsExecutor>()) {

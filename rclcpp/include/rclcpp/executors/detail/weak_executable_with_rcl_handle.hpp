@@ -272,7 +272,6 @@ struct WeakExecutableWithRclHandleCache
       return false;
   }
 
-
   void regenerate(rclcpp::CallbackGroup & callback_group)
   {
 //     std::cout << "Regenerate callback_group_ptr " << &callback_group << std::endl;
@@ -484,6 +483,7 @@ struct WeakExecutableWithRclHandleCache
 
     cache_ditry = false;
   }
+
 
   void add_guard_condition(rclcpp::GuardCondition::SharedPtr ptr, std::function<void(void)> fun)
   {

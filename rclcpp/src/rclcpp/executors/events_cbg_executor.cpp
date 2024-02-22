@@ -1,3 +1,6 @@
+#include <rclcpp/executors/events_cbg_executor.hpp>
+
+
 // Copyright 2024 Cellumation GmbH
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,24 +29,222 @@
 #include "rclcpp/logging.hpp"
 #include "rclcpp/node.hpp"
 #include <inttypes.h>
-// #include "rclcpp/executors/detail/rcl_to_rclcpp_map.hpp"
+#include "detail/callback_group_scheduler.hpp"
 // #include "rclcpp/executors/detail/any_executable_weak_ref.hpp"
 
 namespace rclcpp::executors
 {
 
-CBGExecutor::CBGExecutor(
+template <class ExecutableType_T>
+struct WeakExecutableWithScheduler
+{
+  WeakExecutableWithScheduler(const std::shared_ptr<ExecutableType_T> &executable, CallbackGroupScheduler *scheduler)
+    : executable(executable), scheduler(scheduler)
+  {
+  }
+
+  using ExecutableType = ExecutableType_T;
+
+//  WeakExecutableWithRclHandle(WeakExecutableWithRclHandle &&) = default;
+/*
+ WeakExecutableWithRclHandle& operator= (const WeakExecutableWithRclHandle &) = delete;*/
+
+
+  std::weak_ptr<ExecutableType> executable;
+  CallbackGroupScheduler *scheduler;
+  bool processed;
+
+  bool executable_alive()
+  {
+    auto use_cnt = executable.use_count();
+    if(use_cnt == 0)
+    {
+      return false;
+    }
+
+    return true;
+  }
+};
+
+using WeakTimerRef = WeakExecutableWithScheduler<rclcpp::TimerBase>;
+
+using WeakSubscriberRef = WeakExecutableWithScheduler<rclcpp::SubscriptionBase>;
+using WeakClientRef = WeakExecutableWithScheduler<rclcpp::ClientBase>;
+using WeakServiceRef = WeakExecutableWithScheduler<rclcpp::ServiceBase>;
+using WeakWaitableRef = WeakExecutableWithScheduler<rclcpp::Waitable>;
+
+struct TimerQueue
+{
+    CallbackGroupSchedulerEv &scheduler;
+
+    //FIXME, we weant to store the RCL references here
+    std::vector<WeakTimerRef> all_timers;
+
+    //FIXME we need multiple queues per timer types
+    std::multimap<std::chrono::nanoseconds, WeakTimerRef> running_timers;
+
+    void add_timer(const rclcpp::TimerBase::SharedPtr &timer)
+    {
+        all_timers.emplace_back(timer, &scheduler);
+
+        if(!timer->is_canceled())
+        {
+            auto next_trigger_time = std::chrono::steady_clock::now() + timer->time_until_trigger();
+        }
+    };
+};
+
+struct WeakExecutableCache
+{
+  WeakExecutableCache(CallbackGroupSchedulerEv &scheduler) :
+    scheduler(scheduler)
+    {
+    }
+
+  WeakExecutableCache();
+
+  std::vector<WeakTimerRef> timers;
+  std::vector<WeakSubscriberRef> subscribers;
+  std::vector<WeakClientRef> clients;
+  std::vector<WeakServiceRef> services;
+  std::vector<WeakWaitableRef> waitables;
+  std::vector<GuardConditionWithFunction> guard_conditions;
+
+  CallbackGroupSchedulerEv &scheduler;
+  std::unique_ptr<rclcpp::experimental::TimersManager> timer_manager;
+
+  bool cache_ditry = true;
+
+  void clear()
+  {
+    timers.clear();
+    subscribers.clear();
+    clients.clear();
+    services.clear();
+    waitables.clear();
+    guard_conditions.clear();
+  }
+
+
+  void regenerate_events(rclcpp::CallbackGroup & callback_group)
+  {
+    clear();
+
+    timer_manager->clear();
+
+    // we reserve to much memory here, this this should be fine
+    if(timers.capacity() == 0)
+    {
+      timers.reserve(callback_group.size());
+      subscribers.reserve(callback_group.size());
+      clients.reserve(callback_group.size());
+      services.reserve(callback_group.size());
+      waitables.reserve(callback_group.size());
+    }
+
+    const auto add_sub = [this](const rclcpp::SubscriptionBase::SharedPtr &s)
+    {
+      //element not found, add new one
+//       auto &entry = subscribers.emplace_back(WeakSubscriberRef(s, &scheduler));
+      s->set_on_new_message_callback([weak_ptr = rclcpp::SubscriptionBase::WeakPtr(s), this] (size_t nr_msg) mutable {
+          for(size_t i = 0; i < nr_msg; i++)
+          {
+            scheduler.add_ready_executable(weak_ptr);
+          }
+        }
+      );
+    };
+    const auto add_timer = [this](const rclcpp::TimerBase::SharedPtr &s)
+    {
+      timer_manager->add_timer(s, [weak_ptr = rclcpp::TimerBase::WeakPtr(s), this] (const TimerBase *) mutable {
+            scheduler.add_ready_executable(weak_ptr);
+        });
+    };
+
+    const auto add_client = [this](const rclcpp::ClientBase::SharedPtr &s)
+    {
+      s->set_on_new_response_callback([weak_ptr = rclcpp::ClientBase::WeakPtr(s), this] (size_t nr_msg) mutable {
+          for(size_t i = 0; i < nr_msg; i++)
+          {
+            scheduler.add_ready_executable(weak_ptr);
+          }
+        }
+      );
+    };
+
+    const auto add_service = [this](const rclcpp::ServiceBase::SharedPtr &s)
+    {
+      s->set_on_new_request_callback([weak_ptr = rclcpp::ServiceBase::WeakPtr(s), this] (size_t nr_msg) mutable {
+          for(size_t i = 0; i < nr_msg; i++)
+          {
+            scheduler.add_ready_executable(weak_ptr);
+          }
+        }
+      );
+    };
+
+
+    add_guard_condition_event(callback_group.get_notify_guard_condition(), [this]() {
+//         RCUTILS_LOG_ERROR_NAMED("rclcpp", "GC: Callback group was changed");
+
+        cache_ditry = true;
+      });
+
+    const auto add_waitable = [this](const rclcpp::Waitable::SharedPtr &s)
+    {
+      s->set_on_ready_callback([weak_ptr = rclcpp::Waitable::WeakPtr(s), this] (size_t nr_msg, int internal_ev_type) mutable {
+          for(size_t i = 0; i < nr_msg; i++)
+          {
+            scheduler.add_ready_executable(WaitableWithEventType{weak_ptr, internal_ev_type});
+          }
+        }
+      );
+    };
+
+
+    callback_group.collect_all_ptrs(add_sub, add_service, add_client, add_timer, add_waitable);
+
+//     RCUTILS_LOG_ERROR_NAMED("rclcpp", "GC: regeneraetd, new size : t %lu, sub %lu, c %lu, s %lu, gc %lu, waitables %lu", wait_set_size.timers, wait_set_size.subscriptions, wait_set_size.clients, wait_set_size.services, wait_set_size.guard_conditions, waitables.size());
+
+
+    cache_ditry = false;
+  }
+
+
+
+  void add_guard_condition_event(rclcpp::GuardCondition::SharedPtr ptr, std::function<void(void)> fun)
+  {
+    guard_conditions.emplace_back(GuardConditionWithFunction(ptr, std::move(fun)));
+
+
+    for(auto &entry : guard_conditions)
+    {
+        entry.guard_condition->set_on_trigger_callback([ptr = &entry] (size_t nr_events) {
+        for(size_t i = 0; i < nr_events; i++)
+        {
+          // FIXME add to scheduler
+        }
+      });
+    }
+
+  }
+};
+
+
+EventsCBGExecutor::EventsCBGExecutor(
     const rclcpp::ExecutorOptions & options,
     size_t number_of_threads,
     std::chrono::nanoseconds next_exec_timeout)
-    : next_exec_timeout_(next_exec_timeout),
-
+    :
+      timer_manager(options.context, std::function<void (const rclcpp::TimerBase *)>()),
+      next_exec_timeout_(next_exec_timeout),
       spinning(false),
       interrupt_guard_condition_(std::make_shared<rclcpp::GuardCondition>(options.context)),
       shutdown_guard_condition_(std::make_shared<rclcpp::GuardCondition>(options.context)),
       context_(options.context),
       global_executable_cache(std::make_unique<WeakExecutableWithRclHandleCache>()),
       nodes_executable_cache(std::make_unique<WeakExecutableWithRclHandleCache>())
+)
 {
 
     global_executable_cache->add_guard_condition(
@@ -85,7 +286,7 @@ CBGExecutor::CBGExecutor(
 
 }
 
-CBGExecutor::~CBGExecutor()
+EventsCBGExecutor::~EventsCBGExecutor()
 {
 
     work_ready_conditional.notify_all();
@@ -126,100 +327,14 @@ CBGExecutor::~CBGExecutor()
 
 }
 
-void CallbackGroupScheduler::clear_and_prepare(const size_t max_timer, const size_t max_subs, const size_t max_services, const size_t max_clients, const size_t max_waitables)
-{
-    ready_timers.clear_and_prepare(max_timer);
-    ready_subscriptions.clear_and_prepare(max_subs);
-    ready_services.clear_and_prepare(max_services);
-    ready_clients.clear_and_prepare(max_clients);
-    ready_waitables.clear_and_prepare(max_waitables);
-}
-
-bool CallbackGroupScheduler::execute_unprocessed_executable_until(const std::chrono::time_point<std::chrono::steady_clock> &stop_time, enum Priorities for_priority)
-{
-    switch (for_priority) {
-    case Client:
-        return ready_clients.execute_unprocessed_executable_until(stop_time);
-        break;
-    case Service:
-        return ready_services.execute_unprocessed_executable_until(stop_time);
-        break;
-    case Subscription:
-        return ready_subscriptions.execute_unprocessed_executable_until(stop_time);
-        break;
-    case Timer:
-        return ready_timers.execute_unprocessed_executable_until(stop_time);
-        break;
-    case Waitable:
-        return ready_waitables.execute_unprocessed_executable_until(stop_time);
-        break;
-    }
-    return false;
-}
-
-bool CallbackGroupScheduler::get_unprocessed_executable(
-    AnyExecutable & any_executable,
-    enum Priorities for_priority)
-{
-    switch (for_priority) {
-    case Client:
-        return ready_clients.get_unprocessed_executable(any_executable);
-        break;
-    case Service:
-        return ready_services.get_unprocessed_executable(any_executable);
-        break;
-    case Subscription:
-        return ready_subscriptions.get_unprocessed_executable(any_executable);
-        break;
-    case Timer:
-        return ready_timers.get_unprocessed_executable(any_executable);
-        break;
-    case Waitable:
-        return ready_waitables.get_unprocessed_executable(any_executable);
-        break;
-    }
-    return false;
-}
-
-bool CallbackGroupScheduler::has_unprocessed_executables()
-{
-    return ready_subscriptions.has_unprocessed_executables() ||
-           ready_timers.has_unprocessed_executables() ||
-           ready_clients.has_unprocessed_executables() ||
-           ready_services.has_unprocessed_executables() ||
-           ready_waitables.has_unprocessed_executables();
-}
-
-
-void CallbackGroupScheduler::add_ready_executable(SubscriberRef & executable)
-{
-    ready_subscriptions.add_ready_executable(executable);
-}
-void CallbackGroupScheduler::add_ready_executable(ServiceRef & executable)
-{
-    ready_services.add_ready_executable(executable);
-}
-void CallbackGroupScheduler::add_ready_executable(TimerRef & executable)
-{
-    ready_timers.add_ready_executable(executable);
-}
-void CallbackGroupScheduler::add_ready_executable(ClientRef & executable)
-{
-    ready_clients.add_ready_executable(executable);
-}
-void CallbackGroupScheduler::add_ready_executable(WaitableRef & executable)
-{
-    ready_waitables.add_ready_executable(executable);
-}
-
-bool CBGExecutor::execute_ready_executables_until(const std::chrono::time_point<std::chrono::steady_clock> &stop_time)
+bool EventsCBGExecutor::execute_ready_executables_until(const std::chrono::time_point<std::chrono::steady_clock> &stop_time)
 {
     bool found_work = false;
 
-    for (size_t i = CallbackGroupScheduler::Priorities::Timer;
-            i <= CallbackGroupScheduler::Priorities::Waitable; i++)
+    for (size_t i = CallbackGroupSchedulerEv::Priorities::Timer;
+            i <= CallbackGroupSchedulerEv::Priorities::Waitable; i++)
     {
-        CallbackGroupScheduler::Priorities cur_prio(static_cast<CallbackGroupScheduler::Priorities>(i));
+        CallbackGroupSchedulerEv::Priorities cur_prio(static_cast<CallbackGroupSchedulerEv::Priorities>(i));
 
         for (CallbackGroupData & cbg_with_data : callback_groups)
         {
@@ -235,7 +350,7 @@ bool CBGExecutor::execute_ready_executables_until(const std::chrono::time_point<
 }
 
 
-bool CBGExecutor::get_next_ready_executable(AnyExecutable & any_executable)
+bool EventsCBGExecutor::get_next_ready_executable(AnyExecutableCbgEv & any_executable)
 {
     if(!spinning.load())
     {
@@ -254,9 +369,6 @@ bool CBGExecutor::get_next_ready_executable(AnyExecutable & any_executable)
 
     std::vector<ReadyCallbacksWithSharedPtr> ready_callbacks;
     ready_callbacks.reserve(callback_groups.size());
-
-
-    //FIXME if we only keep a set of ready callback groups here, we can be way faster
 
 
     for (auto it = callback_groups.begin(); it != callback_groups.end(); ) {
@@ -279,18 +391,17 @@ bool CBGExecutor::get_next_ready_executable(AnyExecutable & any_executable)
 
     bool found_work = false;
 
-    for (size_t i = CallbackGroupScheduler::Priorities::Timer;
-            i <= CallbackGroupScheduler::Priorities::Waitable; i++)
+    for (size_t i = CallbackGroupSchedulerEv::Priorities::Timer;
+            i <= CallbackGroupSchedulerEv::Priorities::Waitable; i++)
     {
-        CallbackGroupScheduler::Priorities cur_prio(static_cast<CallbackGroupScheduler::Priorities>(i));
+        CallbackGroupSchedulerEv::Priorities cur_prio(static_cast<CallbackGroupSchedulerEv::Priorities>(i));
         for (ReadyCallbacksWithSharedPtr & ready_elem: ready_callbacks) {
 
             if(!found_work)
             {
                 if (ready_elem.data->scheduler->get_unprocessed_executable(any_executable, cur_prio)) {
-                    any_executable.callback_group = ready_elem.callback_group;
                     // mark callback group as in use
-                    any_executable.callback_group->can_be_taken_from().store(false);
+                    ready_elem.callback_group->can_be_taken_from().store(false);
                     found_work = true;
                     ready_elem.ready = false;
 //                     RCUTILS_LOG_ERROR_NAMED("rclcpp", "get_next_ready_executable : found ready executable");
@@ -312,12 +423,12 @@ bool CBGExecutor::get_next_ready_executable(AnyExecutable & any_executable)
 }
 
 size_t
-CBGExecutor::get_number_of_threads()
+EventsCBGExecutor::get_number_of_threads()
 {
     return number_of_threads_;
 }
 
-void CBGExecutor::sync_callback_groups()
+void EventsCBGExecutor::sync_callback_groups()
 {
     if (!needs_callback_group_resync.exchange(false)) {
         return;
@@ -360,9 +471,9 @@ void CBGExecutor::sync_callback_groups()
 //         RCUTILS_LOG_INFO("Using new callback group");
 
         CallbackGroupData new_entry;
-        new_entry.scheduler = std::make_unique<CallbackGroupScheduler>();
-        new_entry.executable_cache = std::make_unique<WeakExecutableWithRclHandleCache>(*new_entry.scheduler);
-        new_entry.executable_cache->regenerate(*cbg);
+        new_entry.scheduler = std::make_unique<CallbackGroupSchedulerEv>();
+        new_entry.executable_cache = std::make_unique<WeakExecutableCache>(*new_entry.scheduler);
+        new_entry.executable_cache->regenerate_events(*cbg);
         new_entry.callback_group = std::move(cbg);
         next_group_data.push_back(std::move(new_entry));
     };
@@ -419,18 +530,12 @@ void CBGExecutor::sync_callback_groups()
     callback_groups.swap(next_group_data);
 }
 
-void CBGExecutor::wait_for_work(
-    std::chrono::nanoseconds timeout,
-    bool do_not_wait_if_all_groups_busy)
+
+void EventsCBGExecutor::do_housekeeping()
 {
     using namespace rclcpp::exceptions;
 
-    WaitSetSize wait_set_size;
-
     sync_callback_groups();
-
-    std::vector<CallbackGroupData *> idle_callback_groups;
-    idle_callback_groups.reserve(callback_groups.size());
 
     {
         std::lock_guard g(callback_groups_mutex);
@@ -456,145 +561,43 @@ void CBGExecutor::wait_for_work(
             {
                 //       RCUTILS_LOG_INFO("Regenerating callback group");
                 // Regenerating clears the dirty flag
-                cbg_with_data.executable_cache->regenerate(*cbg_shr_ptr);
+                cbg_with_data.executable_cache->regenerate_events(*cbg_shr_ptr);
             }
-
-            wait_set_size.add(cbg_with_data.executable_cache->wait_set_size);
-
-
-            // setup the groups for the next round
-            cbg_with_data.scheduler->clear_and_prepare(cbg_with_data.executable_cache->timers.size(),
-                    cbg_with_data.executable_cache->subscribers.size(),
-                    cbg_with_data.executable_cache->services.size(),
-                    cbg_with_data.executable_cache->clients.size(),
-                    cbg_with_data.executable_cache->waitables.size());
-
-            idle_callback_groups.push_back(&cbg_with_data);
         }
     }
 
-    if (do_not_wait_if_all_groups_busy && idle_callback_groups.empty()) {
-        return;
-    }
-
-//     RCUTILS_LOG_WARN("Adding global_executable_cache");
-
-    // interrupt_guard_condition_ and shutdown_guard_condition_
-    wait_set_size.add(global_executable_cache->wait_set_size);
-
-//     RCUTILS_LOG_WARN("Adding nodes_executable_cache");
-    // guard conditions of the nodes
-    wait_set_size.add(nodes_executable_cache->wait_set_size);
-
-    // prepare the wait set
-    wait_set_size.clear_and_resize_wait_set(wait_set_);
-
-    // add all ready callback groups
-    for (CallbackGroupData  *cbg_with_data: idle_callback_groups) {
-        // no locking needed here, as we don't access the scheduler
-
-        if(!cbg_with_data->executable_cache->add_to_wait_set(wait_set_))
-        {
-            RCUTILS_LOG_WARN_NAMED(
-                "rclcpp",
-                "Adding of objects to waitset failed. This should never happen.");
-        }
-    }
-
-    // add guard_conditions for node or callback change
-    global_executable_cache->add_to_wait_set(wait_set_);
-    nodes_executable_cache->add_to_wait_set(wait_set_);
-
-    if(!spinning.load())
-    {
-      return;
-    }
-
-    rcl_ret_t status =
-        rcl_wait(&wait_set_, timeout.count());
-    if (status == RCL_RET_WAIT_SET_EMPTY) {
-        RCUTILS_LOG_WARN_NAMED(
-            "rclcpp",
-            "empty wait set received in rcl_wait(). This should never happen.");
-    } else if (status != RCL_RET_OK && status != RCL_RET_TIMEOUT) {
-        using rclcpp::exceptions::throw_from_rcl_error;
-        throw_from_rcl_error(status, "rcl_wait() failed");
-    }
-
-    {
-        std::lock_guard g(callback_groups_mutex);
-        // super duper expensive
-        // This will add all ready events to the associated schedulers
-        WeakExecutableWithRclHandleCache::collect_ready_from_waitset(wait_set_);
-    }
-
-    //at this point we don't need the wait_set_ any more
 }
 
 void
-CBGExecutor::run(size_t this_thread_number)
+EventsCBGExecutor::run(size_t this_thread_number)
 {
     (void)this_thread_number;
 
-    bool had_work = false;
-
     while (rclcpp::ok(this->context_) && spinning.load()) {
-        rclcpp::AnyExecutable any_exec;
+        rclcpp::executors::AnyExecutableCbgEv any_exec;
 
         if (!get_next_ready_executable(any_exec))
         {
-            if(wait_mutex_.try_lock())
+
+            if(spinning.load())
             {
-//                 RCUTILS_LOG_ERROR_NAMED("rclcpp", "calling wait_for_work");
-                wait_for_work(next_exec_timeout_, false);
-                wait_mutex_.unlock();
-            }
-            else
-            {
-                //some other thread is blocking the wait_for_work function.
-
-                if(had_work)
-                {
-//                     RCUTILS_LOG_ERROR_NAMED("rclcpp", "triggering waitset");
-
-                    // Wake the wait, because it may need to be recalculated
-                    try {
-                        interrupt_guard_condition_->trigger();
-                    } catch (const rclcpp::exceptions::RCLError & ex) {
-                        throw std::runtime_error(
-                            std::string(
-                                "Failed to trigger guard condition from execute_any_executable: ") + ex.what());
-                    }
-                }
-
-                had_work = false;
                 std::unique_lock lk(conditional_mutex);
-
-                if(spinning.load())
-                {
 //                 RCUTILS_LOG_ERROR_NAMED("rclcpp", "going to sleep");
-                  work_ready_conditional.wait(lk);
-                }
-//                 RCUTILS_LOG_ERROR_NAMED("rclcpp", "woken up");
+                work_ready_conditional.wait(lk);
             }
+//                 RCUTILS_LOG_ERROR_NAMED("rclcpp", "woken up");
             continue;
         }
 
-        had_work = true;
-
-        execute_any_executable(any_exec);
-
-        // Clear the callback_group to prevent the AnyExecutable destructor from
-        // resetting the callback group `can_be_taken_from`
-        any_exec.callback_group.reset();
+        any_exec.execute_function();
     }
 
 //     RCUTILS_LOG_INFO("Stopping execution thread");
 }
 
-void CBGExecutor::spin_once_internal(std::chrono::nanoseconds timeout)
+void EventsCBGExecutor::spin_once_internal(std::chrono::nanoseconds timeout)
 {
-    rclcpp::AnyExecutable any_exec;
+    AnyExecutableCbgEv any_exec;
     {
         if (!rclcpp::ok(this->context_) || !spinning.load()) {
             return;
@@ -602,25 +605,20 @@ void CBGExecutor::spin_once_internal(std::chrono::nanoseconds timeout)
 
         if (!get_next_ready_executable(any_exec)) {
 
-            wait_for_work(timeout);
+            std::unique_lock lk(conditional_mutex);
+            work_ready_conditional.wait_for(lk, timeout);
 
             if (!get_next_ready_executable(any_exec)) {
                 return;
             }
         }
-
-        any_exec.callback_group->can_be_taken_from().store(false);
     }
 
-    execute_any_executable(any_exec);
-
-    // Clear the callback_group to prevent the AnyExecutable destructor from
-    // resetting the callback group `can_be_taken_from`
-    any_exec.callback_group.reset();
+    any_exec.execute_function();
 }
 
 void
-CBGExecutor::spin_once(std::chrono::nanoseconds timeout)
+EventsCBGExecutor::spin_once(std::chrono::nanoseconds timeout)
 {
     if (spinning.exchange(true)) {
         throw std::runtime_error("spin_once() called while already spinning");
@@ -630,37 +628,23 @@ CBGExecutor::spin_once(std::chrono::nanoseconds timeout)
     spin_once_internal(timeout);
 }
 
+
 void
-CBGExecutor::execute_any_executable(AnyExecutable & any_exec)
+EventsCBGExecutor::spin_some(std::chrono::nanoseconds max_duration)
 {
-    if (any_exec.timer) {
-//         RCUTILS_LOG_ERROR_NAMED("rclcpp", "Executing Timer");
-        rclcpp::Executor::execute_timer(any_exec.timer);//, any_exec.data);
-    }
-    if (any_exec.subscription) {
-//         RCUTILS_LOG_ERROR_NAMED("rclcpp", "Executing subscription");
-        rclcpp::Executor::execute_subscription(any_exec.subscription);
-    }
-    if (any_exec.service) {
-//         RCUTILS_LOG_ERROR_NAMED("rclcpp", "Executing service");
-        rclcpp::Executor::execute_service(any_exec.service);
-    }
-    if (any_exec.client) {
-//         RCUTILS_LOG_ERROR_NAMED("rclcpp", "Executing client");
-        rclcpp::Executor::execute_client(any_exec.client);
-    }
-    if (any_exec.waitable) {
-//         RCUTILS_LOG_ERROR_NAMED("rclcpp", "Executing waitable");
-        any_exec.waitable->execute(any_exec.data);
-    }
-    // Reset the callback_group, regardless of type
-    if(any_exec.callback_group)
-    {
-        any_exec.callback_group->can_be_taken_from().store(true);
-    }
+    collect_and_execute_ready_events(max_duration, false);
 }
 
-bool CBGExecutor::collect_and_execute_ready_events(
+void EventsCBGExecutor::spin_all(std::chrono::nanoseconds max_duration)
+{
+    if (max_duration < std::chrono::nanoseconds::zero()) {
+        throw std::invalid_argument("max_duration must be greater than or equal to 0");
+    }
+
+    collect_and_execute_ready_events(max_duration, true);
+}
+
+bool EventsCBGExecutor::collect_and_execute_ready_events(
     std::chrono::nanoseconds max_duration,
     bool recollect_if_no_work_available)
 {
@@ -680,6 +664,8 @@ bool CBGExecutor::collect_and_execute_ready_events(
     bool first_collect = true;
     bool had_work = false;
 
+    //FIXME this is super hard to do, we need to know when to stop
+
     while (rclcpp::ok(this->context_) && spinning && cur_time < end_time) {
         if (!execute_ready_executables_until(end_time)) {
 
@@ -689,8 +675,11 @@ bool CBGExecutor::collect_and_execute_ready_events(
             }
 
             if (first_collect || got_work_since_collect) {
-                // collect any work, that is already ready
-                wait_for_work(std::chrono::nanoseconds::zero(), !first_collect);
+                // wait for new work
+
+//                 std::unique_lock lk(conditional_mutex);
+//                 work_ready_conditional.wait_for(lk, std::chrono::nanoseconds::zero());
+//                 wait_for_work(std::chrono::nanoseconds::zero(), !first_collect);
 
                 first_collect = false;
                 got_work_since_collect = false;
@@ -707,28 +696,12 @@ bool CBGExecutor::collect_and_execute_ready_events(
 
     return had_work;
 }
-
 void
-CBGExecutor::spin_some(std::chrono::nanoseconds max_duration)
-{
-    collect_and_execute_ready_events(max_duration, false);
-}
-
-void CBGExecutor::spin_all(std::chrono::nanoseconds max_duration)
-{
-    if (max_duration < std::chrono::nanoseconds::zero()) {
-        throw std::invalid_argument("max_duration must be greater than or equal to 0");
-    }
-
-    collect_and_execute_ready_events(max_duration, true);
-}
-
-void
-CBGExecutor::spin()
+EventsCBGExecutor::spin()
 {
 //     RCUTILS_LOG_ERROR_NAMED(
 //         "rclcpp",
-//         "CBGExecutor::spin()");
+//         "EventsCBGExecutor::spin()");
 
 
     if (spinning.exchange(true)) {
@@ -740,7 +713,7 @@ CBGExecutor::spin()
     {
         std::lock_guard wait_lock{wait_mutex_};
         for (; thread_id < number_of_threads_ - 1; ++thread_id) {
-            auto func = std::bind(&CBGExecutor::run, this, thread_id);
+            auto func = std::bind(&EventsCBGExecutor::run, this, thread_id);
             threads.emplace_back(func);
         }
     }
@@ -752,7 +725,7 @@ CBGExecutor::spin()
 }
 
 void
-CBGExecutor::add_callback_group(
+EventsCBGExecutor::add_callback_group(
     rclcpp::CallbackGroup::SharedPtr group_ptr,
     rclcpp::node_interfaces::NodeBaseInterface::SharedPtr /*node_ptr*/,
     bool notify)
@@ -775,7 +748,7 @@ CBGExecutor::add_callback_group(
 }
 
 void
-CBGExecutor::cancel()
+EventsCBGExecutor::cancel()
 {
     spinning.store(false);
 
@@ -791,14 +764,14 @@ CBGExecutor::cancel()
 }
 
 std::vector<rclcpp::CallbackGroup::WeakPtr>
-CBGExecutor::get_all_callback_groups()
+EventsCBGExecutor::get_all_callback_groups()
 {
     std::lock_guard lock{added_callback_groups_mutex_};
     return added_callback_groups;
 }
 
 void
-CBGExecutor::remove_callback_group(
+EventsCBGExecutor::remove_callback_group(
     rclcpp::CallbackGroup::SharedPtr group_ptr,
     bool notify)
 {
@@ -841,7 +814,7 @@ CBGExecutor::remove_callback_group(
 }
 
 void
-CBGExecutor::add_node(rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node_ptr, bool notify)
+EventsCBGExecutor::add_node(rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node_ptr, bool notify)
 {
     // If the node already has an executor
     std::atomic_bool & has_executor = node_ptr->get_associated_with_executor_atomic();
@@ -871,13 +844,13 @@ CBGExecutor::add_node(rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node
 }
 
 void
-CBGExecutor::add_node(std::shared_ptr<rclcpp::Node> node_ptr, bool notify)
+EventsCBGExecutor::add_node(std::shared_ptr<rclcpp::Node> node_ptr, bool notify)
 {
     add_node(node_ptr->get_node_base_interface(), notify);
 }
 
 void
-CBGExecutor::remove_node(
+EventsCBGExecutor::remove_node(
     rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node_ptr,
     bool notify)
 {
@@ -911,13 +884,13 @@ CBGExecutor::remove_node(
 }
 
 void
-CBGExecutor::remove_node(std::shared_ptr<rclcpp::Node> node_ptr, bool notify)
+EventsCBGExecutor::remove_node(std::shared_ptr<rclcpp::Node> node_ptr, bool notify)
 {
     remove_node(node_ptr->get_node_base_interface(), notify);
 }
 
 // add a callback group to the executor, not bound to any node
-void CBGExecutor::add_callback_group_only(rclcpp::CallbackGroup::SharedPtr group_ptr)
+void EventsCBGExecutor::add_callback_group_only(rclcpp::CallbackGroup::SharedPtr group_ptr)
 {
     add_callback_group(group_ptr, nullptr, true);
 }

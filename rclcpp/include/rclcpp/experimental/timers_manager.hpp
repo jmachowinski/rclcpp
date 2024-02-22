@@ -104,6 +104,16 @@ public:
   RCLCPP_PUBLIC
   void add_timer(rclcpp::TimerBase::SharedPtr timer);
 
+    /**
+   * @brief Adds a new timer to the storage, maintaining weak ownership of it.
+   * Function is thread safe and it can be called regardless of the state of the timers thread.
+   *
+   * @param timer the timer to add.
+   * @throws std::invalid_argument if timer is a nullptr.
+   */
+  RCLCPP_PUBLIC
+  void add_timer(rclcpp::TimerBase::SharedPtr timer, std::function<void (const rclcpp::TimerBase *)> on_ready_callback);
+
   /**
    * @brief Remove a single timer from the object storage.
    * Will do nothing if the timer was not being stored here.
@@ -187,6 +197,13 @@ private:
   using TimerPtr = rclcpp::TimerBase::SharedPtr;
   using WeakTimerPtr = rclcpp::TimerBase::WeakPtr;
 
+  template <class TimerPtrType>
+  struct TimerPtrWithCallback
+  {
+    TimerPtrType timer_ptr;
+    std::function<void (const rclcpp::TimerBase *)> on_ready_callback;
+  };
+
   // Forward declaration
   class TimersHeap;
 
@@ -202,16 +219,19 @@ private:
   class WeakTimersHeap
   {
 public:
+
+    using HeapElement = TimerPtrWithCallback<WeakTimerPtr>;
+
     /**
      * @brief Add a new timer to the heap. After the addition, the heap property is enforced.
      *
      * @param timer new timer to add.
      * @return true if timer has been added, false if it was already there.
      */
-    bool add_timer(TimerPtr timer)
+    bool add_timer(TimerPtr timer, std::function<void (const rclcpp::TimerBase *)> on_ready_callback)
     {
       TimersHeap locked_heap = this->validate_and_lock();
-      bool added = locked_heap.add_timer(std::move(timer));
+      bool added = locked_heap.add_timer(std::move(timer), std::move(on_ready_callback));
 
       if (added) {
         // Re-create the weak heap with the new timer added
@@ -247,8 +267,8 @@ public:
      */
     TimerPtr get_timer(const rclcpp::TimerBase * timer_id)
     {
-      for (auto & weak_timer : weak_heap_) {
-        auto timer = weak_timer.lock();
+      for (auto & elem : weak_heap_) {
+        auto timer = elem.timer_ptr.lock();
         if (timer.get() == timer_id) {
           return timer;
         }
@@ -259,7 +279,7 @@ public:
     /**
      * @brief Returns a const reference to the front element.
      */
-    const WeakTimerPtr & front() const
+    const HeapElement & front() const
     {
       return weak_heap_.front();
     }
@@ -285,12 +305,17 @@ public:
       TimersHeap locked_heap;
       bool any_timer_destroyed = false;
 
-      for (auto weak_timer : weak_heap_) {
-        auto timer = weak_timer.lock();
+      for (auto weak_element : weak_heap_) {
+        auto timer = weak_element.timer_ptr.lock();
         if (timer) {
+
+          TimersHeap::HeapElement e;
+          e.timer_ptr = std::move(timer);
+          e.on_ready_callback = weak_element.on_ready_callback;
+
           // This timer is valid, so add it to the locked heap
           // Note: we access friend private `owned_heap_` member field.
-          locked_heap.owned_heap_.push_back(std::move(timer));
+          locked_heap.owned_heap_.push_back(std::move(e));
         } else {
           // This timer went out of scope, so we don't add it to locked heap
           // and we mark the corresponding flag.
@@ -323,8 +348,13 @@ public:
     {
       weak_heap_.clear();
       // Note: we access friend private `owned_heap_` member field.
-      for (auto t : heap.owned_heap_) {
-        weak_heap_.push_back(t);
+      for (const auto &t : heap.owned_heap_) {
+
+          HeapElement e;
+          e.timer_ptr = t.timer_ptr;
+          e.on_ready_callback = t.on_ready_callback;
+
+          weak_heap_.push_back(e);
       }
     }
 
@@ -337,7 +367,7 @@ public:
     }
 
 private:
-    std::vector<WeakTimerPtr> weak_heap_;
+    std::vector<TimerPtrWithCallback<WeakTimerPtr>> weak_heap_;
   };
 
   /**
@@ -349,21 +379,26 @@ private:
   class TimersHeap
   {
 public:
+    using HeapElement = TimerPtrWithCallback<TimerPtr>;
+
     /**
      * @brief Try to add a new timer to the heap.
      * After the addition, the heap property is preserved.
      * @param timer new timer to add.
      * @return true if timer has been added, false if it was already there.
      */
-    bool add_timer(TimerPtr timer)
+    bool add_timer(TimerPtr timer, std::function<void (const rclcpp::TimerBase *)> on_ready_callback)
     {
       // Nothing to do if the timer is already stored here
-      auto it = std::find(owned_heap_.begin(), owned_heap_.end(), timer);
+      auto it = std::find_if(owned_heap_.begin(), owned_heap_.end(), [&timer] (const auto &e) {return e.timer_ptr == timer;});
       if (it != owned_heap_.end()) {
         return false;
       }
 
-      owned_heap_.push_back(std::move(timer));
+      TimerPtrWithCallback<TimerPtr> entry;
+      entry.timer_ptr = std::move(timer);
+      entry.on_ready_callback = std::move(on_ready_callback);
+      owned_heap_.push_back(std::move(entry));
       std::push_heap(owned_heap_.begin(), owned_heap_.end(), timer_greater);
 
       return true;
@@ -378,7 +413,7 @@ public:
     bool remove_timer(TimerPtr timer)
     {
       // Nothing to do if the timer is not stored here
-      auto it = std::find(owned_heap_.begin(), owned_heap_.end(), timer);
+      auto it = std::find_if(owned_heap_.begin(), owned_heap_.end(), [&timer] (const auto &e) {return e.timer_ptr == timer;});
       if (it == owned_heap_.end()) {
         return false;
       }
@@ -393,7 +428,7 @@ public:
      * @brief Returns a reference to the front element.
      * @return reference to front element.
      */
-    TimerPtr & front()
+    HeapElement & front()
     {
       return owned_heap_.front();
     }
@@ -402,7 +437,7 @@ public:
      * @brief Returns a const reference to the front element.
      * @return const reference to front element.
      */
-    const TimerPtr & front() const
+    const HeapElement & front() const
     {
       return owned_heap_.front();
     }
@@ -433,8 +468,8 @@ public:
     {
       size_t ready_timers = 0;
 
-      for (TimerPtr t : owned_heap_) {
-        if (t->is_ready()) {
+      for (const HeapElement &e : owned_heap_) {
+        if (e.timer_ptr->is_ready()) {
           ready_timers++;
         }
       }
@@ -472,8 +507,8 @@ public:
      */
     void clear_timers_on_reset_callbacks()
     {
-      for (TimerPtr & t : owned_heap_) {
-        t->clear_on_reset_callback();
+      for (HeapElement & e : owned_heap_) {
+        e.timer_ptr->clear_on_reset_callback();
       }
     }
 
@@ -494,13 +529,13 @@ private:
      * @brief Comparison function between timers.
      * @return true if `a` triggers after `b`.
      */
-    static bool timer_greater(TimerPtr a, TimerPtr b)
+    static bool timer_greater(const HeapElement &a, const HeapElement &b)
     {
       // TODO(alsora): this can cause an error if timers are using different clocks
-      return a->time_until_trigger() > b->time_until_trigger();
+      return a.timer_ptr->time_until_trigger() > b.timer_ptr->time_until_trigger();
     }
 
-    std::vector<TimerPtr> owned_heap_;
+    std::vector<HeapElement> owned_heap_;
   };
 
   /**
