@@ -80,7 +80,10 @@ Clock::now() const
 }
 
 bool
-Clock::sleep_until(Time until, Context::SharedPtr context)
+Clock::sleep_until(
+    Time until,
+    std::condition_variable &cv,
+    Context::SharedPtr context)
 {
   if (!context || !context->is_valid()) {
     throw std::runtime_error("context cannot be slept with because it's invalid");
@@ -90,8 +93,6 @@ Clock::sleep_until(Time until, Context::SharedPtr context)
     throw std::runtime_error("until's clock type does not match this clock's type");
   }
   bool time_source_changed = false;
-
-  std::condition_variable cv;
 
   // Wake this thread if the context is shutdown
   rclcpp::OnShutdownCallbackHandle shutdown_cb_handle = context->add_on_shutdown_callback(
@@ -174,6 +175,13 @@ Clock::sleep_until(Time until, Context::SharedPtr context)
   }
 
   return now() >= until;
+}
+
+bool
+Clock::sleep_until(Time until, Context::SharedPtr context)
+{
+  std::condition_variable cv;
+  return sleep_until(until, cv, context);
 }
 
 bool

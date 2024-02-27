@@ -113,6 +113,12 @@ public:
     Time until,
     Context::SharedPtr context = contexts::get_global_default_context());
 
+  bool
+  sleep_until(
+    Time until,
+    std::condition_variable &cv,
+    Context::SharedPtr context = contexts::get_global_default_context());
+
   /**
    * Sleep for a specified Duration.
    *
