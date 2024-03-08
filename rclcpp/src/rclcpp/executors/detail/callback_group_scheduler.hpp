@@ -50,7 +50,7 @@ public:
     {
         while(!ready_executables.empty())
         {
-            if(!ready_executables.front().expired())
+            if(!ready_executables.front().executable.expired())
             {
                 return true;
             }
@@ -65,7 +65,7 @@ public:
     {
         while(!ready_executables.empty())
         {
-            if (fill_any_executable(any_executable, ready_executables.front())) {
+            if (fill_any_executable(any_executable, ready_executables.front().executable)) {
                 ready_executables.pop_front();
                 return true;
             }
@@ -82,7 +82,7 @@ public:
         while(!ready_executables.empty())
         {
             AnyExecutableCbgEv any_executable;
-            if (fill_any_executable(any_executable, ready_executables.front())) {
+            if (fill_any_executable(any_executable, ready_executables.front().executable)) {
                 ready_executables.pop_front();
 
                 any_executable.execute_function();
@@ -184,7 +184,19 @@ private:
 
         return true;
     }
-    std::deque<ExecutableRef> ready_executables;
+
+    struct ExecutableRefWithAddTime
+    {
+        ExecutableRefWithAddTime(const ExecutableRef &ref) :
+            time_when_added(std::chrono::steady_clock::now()),
+            executable(ref)
+        {
+        }
+        std::chrono::time_point<std::chrono::steady_clock> time_when_added;
+        ExecutableRef executable;
+    };
+
+    std::deque<ExecutableRefWithAddTime> ready_executables;
 
 };
 
