@@ -71,10 +71,92 @@ using WeakClientRef = WeakExecutableWithScheduler<rclcpp::ClientBase>;
 using WeakServiceRef = WeakExecutableWithScheduler<rclcpp::ServiceBase>;
 using WeakWaitableRef = WeakExecutableWithScheduler<rclcpp::Waitable>;
 
+struct TimerQueue2 {
+    CallbackGroupSchedulerEv &scheduler;
+
+    using Timer = std::shared_ptr<const rcl_timer_t>;
+
+    rcl_clock_type_e timer_type;
+
+    TimerQueue2(rcl_clock_type_e timer_type, CallbackGroupSchedulerEv &scheduler) :
+        scheduler(scheduler),
+        timer_type(timer_type),
+        used_clock_for_timers(timer_type)
+    {
+    };
+
+    rclcpp::Clock used_clock_for_timers;
+
+    std::vector<Timer> all_timers;
+
+    std::multimap<std::chrono::nanoseconds, Timer> running_timers;
+
+    /**
+     * Iterate over all timers, and check if we need to add one to the running list
+     *
+     */
+    void check_all_timers()
+    {
+    }
+
+    void add_timer ( const rclcpp::TimerBase::SharedPtr &timer )
+    {
+        rcl_clock_t *clock_type_of_timer;
+        if(rcl_timer_clock(const_cast<rcl_timer_t *>(timer->get_timer_handle().get()), &clock_type_of_timer) != RCL_RET_OK)
+        {
+            assert(false);
+        };
+
+        if(clock_type_of_timer->type != used_clock_for_timers.get_clock_type())
+        {
+            // timer is handled by another queue
+            return;
+        }
+
+
+
+        if(timer->get_timer_handle()->impl
+
+        all_timers.emplace_back ( timer->get_timer_handle() ); //, &scheduler);
+
+        if ( !timer->is_canceled() ) {
+            //FIXME std::chrono::steady_clock::now() is wrong here
+            auto next_trigger_time = std::chrono::steady_clock::now() + timer->time_until_trigger();
+
+//             running_timers.emplace ( next_trigger_time, timer->get_timer_handle() );
+        }
+
+        timer->set_on_reset_callback ( [this] ( size_t ) {
+            check_all_timers();
+        } );
+    };
+
+    /**
+     * Returns the estimated time until the next timer wakes up
+     */
+    std::chrono::nanoseconds get_min_sleep_time() const
+    {
+    }
+
+    Timer *get_next_ready_timer();
+
+};
+
+
 struct TimerQueue {
     CallbackGroupSchedulerEv &scheduler;
 
     using Timer = std::shared_ptr<const rcl_timer_t>;
+
+//       RCL_ROS_TIME,
+//   /// Use system time
+//   RCL_SYSTEM_TIME,
+//   /// Use a steady clock time
+//   RCL_STEADY_TIME
+
+    std::vector<Timer> system_time_timers;
+    std::vector<Timer> steady_time_timers;
+    std::vector<Timer> ros_time_timers;
 
     std::vector<Timer> all_timers;
 
