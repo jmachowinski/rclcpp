@@ -38,6 +38,7 @@ namespace executors
   struct WeakExecutableCache;
   struct AnyExecutableCbgEv;
   class TimerManager;
+  struct GloablaWeakExecutableCache;
 
 class EventsCBGExecutor : public rclcpp::Executor
 {
@@ -281,10 +282,10 @@ private:
 
   /// Stores the executables for the internal guard conditions
   /// e.g. interrupt_guard_condition_ and shutdown_guard_condition_
-  std::unique_ptr<WeakExecutableCache> global_executable_cache;
+  std::unique_ptr<GloablaWeakExecutableCache> global_executable_cache;
 
   /// Stores the executables for guard conditions of the nodes
-  std::unique_ptr<WeakExecutableCache> nodes_executable_cache;
+  std::unique_ptr<GloablaWeakExecutableCache> nodes_executable_cache;
 
   std::mutex conditional_mutex;
   std::condition_variable work_ready_conditional;

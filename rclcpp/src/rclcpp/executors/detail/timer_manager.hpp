@@ -8,6 +8,8 @@
 #include <rcl/timer.h>
 #include <rclcpp/timer.hpp>
 
+#include <inttypes.h>
+
 namespace rclcpp::executors
 {
 
@@ -16,15 +18,27 @@ class TimerQueue
     struct TimerData
     {
         std::shared_ptr<const rcl_timer_t> rcl_ref;
+//         rclcpp::TimerBase::WeakPtr timer_weak_ptr;
         std::function<void()> timer_ready_callback;
     };
 
 public:
     TimerQueue(rcl_clock_type_t timer_type) :
         timer_type(timer_type),
-        used_clock_for_timers(timer_type)
+        used_clock_for_timers(timer_type),
+        trigger_thread([this] () {
+            timer_thread();
+        })
     {
     };
+
+    ~TimerQueue()
+    {
+        running = false;
+        thread_conditional.notify_all();
+
+        trigger_thread.join();
+    }
 
     void add_timer ( const rclcpp::TimerBase::SharedPtr &timer, const std::function<void()> &timer_ready_callback)
     {
@@ -43,11 +57,16 @@ public:
             return;
         }
 
+        RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::add_timer matching timer");
+
+
         std::unique_ptr<TimerData> data = std::make_unique<TimerData>();
         data->timer_ready_callback = std::move(timer_ready_callback);
+//         data->timer_weak_ptr = timer;
         data->rcl_ref = std::move(handle);
 
         timer->set_on_reset_callback ( [data_ptr = data.get(), this] ( size_t ) {
+            RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::timer reset lambda");
             add_timer_to_running_map(data_ptr);
         } );
 
@@ -57,6 +76,8 @@ public:
 
             all_timers.emplace_back ( std::move(data) );
         }
+
+        RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::waking clock");
 
         //wake up thread as new timer was added
         thread_conditional.notify_all();
@@ -79,9 +100,15 @@ public:
             return;
         }
 
+        rcl_ret_t ret = rcl_timer_call(const_cast<rcl_timer_t *>(timer_data->rcl_ref.get()));
+        if(ret == RCL_RET_TIMER_CANCELED)
+        {
+            return;
+        }
+
         int64_t next_call_time;
 
-        auto ret = rcl_timer_get_next_call_time(timer_data->rcl_ref.get(), &next_call_time);
+        ret = rcl_timer_get_next_call_time(timer_data->rcl_ref.get(), &next_call_time);
 
         if(ret == RCL_RET_OK)
         {
@@ -96,7 +123,8 @@ public:
     {
         if(running_timers.empty())
         {
-            return std::chrono::nanoseconds::max();
+            // wired bug, if you return max, the clock wakes up instant
+            return std::chrono::nanoseconds::max() - std::chrono::nanoseconds(1000);
         }
         return running_timers.begin()->first;
     }
@@ -136,15 +164,26 @@ public:
         {
             int64_t time_until_call;
 
-            auto ret = rcl_timer_get_time_until_next_call(running_timers.begin()->second->rcl_ref.get(), &time_until_call);
+            const rcl_timer_t *rcl_timer_ref = running_timers.begin()->second->rcl_ref.get();
+            auto ret = rcl_timer_get_time_until_next_call(rcl_timer_ref, &time_until_call);
             if(ret == RCL_RET_TIMER_CANCELED)
             {
                 running_timers.erase(running_timers.begin());
                 continue;
             }
 
+//             RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::time until call is  %+" PRId64 , time_until_call);
+
             if(time_until_call <= 0)
             {
+                // advance next call time;
+                rcl_ret_t ret = rcl_timer_call(const_cast<rcl_timer_t *>(rcl_timer_ref));
+                if(ret == RCL_RET_TIMER_CANCELED)
+                {
+                    running_timers.erase(running_timers.begin());
+                    continue;
+                }
+
                 running_timers.begin()->second->timer_ready_callback();
                 readd_timer_to_running_map(running_timers.extract(running_timers.begin()));
                 continue;
@@ -157,15 +196,17 @@ public:
     {
         while(running)
         {
+            std::chrono::nanoseconds next_wakeup_time;
             {
                 std::scoped_lock l(mutex);
 
                 call_ready_timer_callbacks();
 
-                std::chrono::nanoseconds next_wakeup_time = get_next_timer_ready_time();
-
-                used_clock_for_timers.sleep_until(rclcpp::Time(next_wakeup_time.count(), timer_type), thread_conditional);
+                next_wakeup_time = get_next_timer_ready_time();
             }
+//             RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::timer_thread before sleep, next wakeup time %+" PRId64 , next_wakeup_time.count());
+            used_clock_for_timers.sleep_until(rclcpp::Time(next_wakeup_time.count(), timer_type), thread_conditional, false);
+//             RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::timer_thread after sleep");
         }
     };
 
@@ -182,6 +223,8 @@ private:
     using TimerMap = std::multimap<std::chrono::nanoseconds, const TimerData *>;
     TimerMap running_timers;
 
+    std::thread trigger_thread;
+
     std::condition_variable thread_conditional;
 };
 
@@ -197,6 +240,8 @@ public:
 
     void add_timer ( const rclcpp::TimerBase::SharedPtr &timer, const std::function<void()> &timer_ready_callback)
     {
+        RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerManager::add_timer");
+
         for(TimerQueue &q : timer_queues)
         {
             q.add_timer(timer, timer_ready_callback);

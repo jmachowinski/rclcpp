@@ -18,7 +18,7 @@ namespace executors
 struct AnyExecutableCbgEv
 {
     std::function<void()> execute_function;
-
+    rclcpp::CallbackGroup::SharedPtr callback_group;
     bool more_executables_ready_in_cbg = false;
 };
 
@@ -30,6 +30,21 @@ struct WaitableWithEventType
     bool expired()
     {
         return waitable.expired();
+    }
+};
+
+struct CallbackEventType
+{
+    CallbackEventType(std::function<void()> callback) :
+        callback(callback)
+    {
+    }
+
+    std::function<void()> callback;
+
+    bool expired()
+    {
+        return false;
     }
 };
 
@@ -185,6 +200,14 @@ private:
         return true;
     }
 
+    bool fill_any_executable(
+        AnyExecutableCbgEv & any_executable,
+        const CallbackEventType & cbev)
+    {
+        any_executable.execute_function = cbev.callback;
+
+        return true;
+    }
     struct ExecutableRefWithAddTime
     {
         ExecutableRefWithAddTime(const ExecutableRef &ref) :
@@ -213,8 +236,9 @@ public:
         Prioritized,
     };
 
-    CallbackGroupSchedulerEv(SchedulingPolicy sched_policy = SchedulingPolicy::Prioritized) :
-        sched_policy(sched_policy)
+    CallbackGroupSchedulerEv(std::condition_variable &work_available, SchedulingPolicy sched_policy = SchedulingPolicy::Prioritized) :
+        sched_policy(sched_policy),
+        work_available(work_available)
     {
     }
 
@@ -223,27 +247,38 @@ public:
     void add_ready_executable(rclcpp::SubscriptionBase::WeakPtr & executable)
     {
         ready_subscriptions.add_ready_executable(executable);
+        work_available.notify_one();
     }
     void add_ready_executable(rclcpp::ServiceBase::WeakPtr & executable)
     {
         ready_services.add_ready_executable(executable);
+        work_available.notify_one();
     }
     void add_ready_executable(rclcpp::TimerBase::WeakPtr & executable)
     {
         ready_timers.add_ready_executable(executable);
+        work_available.notify_one();
     }
     void add_ready_executable(rclcpp::ClientBase::WeakPtr & executable)
     {
         ready_clients.add_ready_executable(executable);
+        work_available.notify_one();
     }
     void add_ready_executable(const WaitableWithEventType & executable)
     {
         ready_waitables.add_ready_executable(executable);
+        work_available.notify_one();
+    }
+    void add_ready_executable(const CallbackEventType & executable)
+    {
+        ready_calls.add_ready_executable(executable);
+        work_available.notify_one();
     }
 
     enum Priorities
     {
-        Timer = 0,
+        Calls = 0,
+        Timer,
         Subscription,
         Service,
         Client,
@@ -253,6 +288,9 @@ public:
     bool get_unprocessed_executable(AnyExecutableCbgEv & any_executable, enum Priorities for_priority)
     {
     switch (for_priority) {
+    case Calls:
+        return ready_calls.get_unprocessed_executable(any_executable);
+        break;
     case Client:
         return ready_clients.get_unprocessed_executable(any_executable);
         break;
@@ -275,6 +313,9 @@ public:
     bool execute_unprocessed_executable_until(const std::chrono::time_point<std::chrono::steady_clock> &stop_time, enum Priorities for_priority)
     {
     switch (for_priority) {
+    case Calls:
+        return ready_calls.execute_unprocessed_executable_until(stop_time);
+        break;
     case Client:
         return ready_clients.execute_unprocessed_executable_until(stop_time);
         break;
@@ -296,7 +337,8 @@ public:
 
     bool has_unprocessed_executables()
     {
-    return ready_subscriptions.has_unprocessed_executables() ||
+    return ready_calls.has_unprocessed_executables() ||
+           ready_subscriptions.has_unprocessed_executables() ||
            ready_timers.has_unprocessed_executables() ||
            ready_clients.has_unprocessed_executables() ||
            ready_services.has_unprocessed_executables() ||
@@ -309,8 +351,11 @@ private:
     ExecutionQueue<rclcpp::ServiceBase::WeakPtr> ready_services;
     ExecutionQueue<rclcpp::ClientBase::WeakPtr> ready_clients;
     ExecutionQueue<WaitableWithEventType> ready_waitables;
+    ExecutionQueue<CallbackEventType> ready_calls;
 
     SchedulingPolicy sched_policy;
+
+    std::condition_variable &work_available;
 };
 
 }

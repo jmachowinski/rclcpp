@@ -83,6 +83,7 @@ bool
 Clock::sleep_until(
     Time until,
     std::condition_variable &cv,
+    bool ignore_wakeups,
     Context::SharedPtr context)
 {
   if (!context || !context->is_valid()) {
@@ -117,6 +118,10 @@ Clock::sleep_until(
     std::unique_lock lock(impl_->clock_mutex_);
     while (now() < until && context->is_valid()) {
       cv.wait_until(lock, chrono_until);
+      if(!ignore_wakeups)
+      {
+        break;
+      }
     }
   } else if (this_clock_type == RCL_SYSTEM_TIME) {
     auto system_time = std::chrono::system_clock::time_point(
@@ -128,6 +133,10 @@ Clock::sleep_until(
     std::unique_lock lock(impl_->clock_mutex_);
     while (now() < until && context->is_valid()) {
       cv.wait_until(lock, system_time);
+      if(!ignore_wakeups)
+      {
+        break;
+      }
     }
   } else if (this_clock_type == RCL_ROS_TIME) {
     // Install jump handler for any amount of time change, for two purposes:
@@ -158,6 +167,10 @@ Clock::sleep_until(
       std::unique_lock lock(impl_->clock_mutex_);
       while (now() < until && context->is_valid() && !time_source_changed) {
         cv.wait_until(lock, system_time);
+        if(!ignore_wakeups)
+        {
+          break;
+        }
       }
     } else {
       // RCL_ROS_TIME with ros_time_is_active.
@@ -166,6 +179,10 @@ Clock::sleep_until(
       std::unique_lock lock(impl_->clock_mutex_);
       while (now() < until && context->is_valid() && !time_source_changed) {
         cv.wait(lock);
+        if(!ignore_wakeups)
+        {
+          break;
+        }
       }
     }
   }
@@ -181,7 +198,7 @@ bool
 Clock::sleep_until(Time until, Context::SharedPtr context)
 {
   std::condition_variable cv;
-  return sleep_until(until, cv, context);
+  return sleep_until(until, cv, true, context);
 }
 
 bool

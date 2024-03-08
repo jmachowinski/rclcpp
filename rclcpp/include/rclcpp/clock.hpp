@@ -117,6 +117,7 @@ public:
   sleep_until(
     Time until,
     std::condition_variable &cv,
+    bool ignore_wakeups,
     Context::SharedPtr context = contexts::get_global_default_context());
 
   /**
