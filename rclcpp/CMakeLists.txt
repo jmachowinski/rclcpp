@@ -64,8 +64,8 @@ set(${PROJECT_NAME}_SRCS
   src/rclcpp/executor.cpp
   src/rclcpp/executors.cpp
   src/rclcpp/executors/events_cbg_executor.cpp
-  src/rclcpp/executors/cbg_executor.cpp
-  src/rclcpp/executors/detail/weak_executable_with_rcl_handle_cache.cpp
+  #src/rclcpp/executors/cbg_executor.cpp
+  #src/rclcpp/executors/detail/weak_executable_with_rcl_handle_cache.cpp
   src/rclcpp/executors/executor_entities_collection.cpp
   src/rclcpp/executors/executor_entities_collector.cpp
   src/rclcpp/executors/executor_notify_waitable.cpp

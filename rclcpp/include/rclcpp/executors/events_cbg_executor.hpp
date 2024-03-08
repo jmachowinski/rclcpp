@@ -22,7 +22,7 @@
 #include <deque>
 #include <unordered_map>
 
-#include "rclcpp/executors/detail/weak_executable_with_rcl_handle.hpp"
+// #include "rclcpp/executors/detail/weak_executable_with_rcl_handle.hpp"
 #include "rclcpp/executor.hpp"
 // #include "rclcpp/executors/callback_group_state.hpp"
 #include "rclcpp/macros.hpp"
@@ -278,10 +278,10 @@ private:
 
   /// Stores the executables for the internal guard conditions
   /// e.g. interrupt_guard_condition_ and shutdown_guard_condition_
-  std::unique_ptr<WeakExecutableWithRclHandleCache> global_executable_cache;
+//   std::unique_ptr<WeakExecutableWithRclHandleCache> global_executable_cache;
 
   /// Stores the executables for guard conditions of the nodes
-  std::unique_ptr<WeakExecutableWithRclHandleCache> nodes_executable_cache;
+//   std::unique_ptr<WeakExecutableWithRclHandleCache> nodes_executable_cache;
 
   std::mutex conditional_mutex;
   std::condition_variable work_ready_conditional;
