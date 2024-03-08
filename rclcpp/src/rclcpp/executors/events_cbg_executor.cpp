@@ -15,7 +15,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "rclcpp/executors/cbg_executor.hpp"
+// #include "rclcpp/executors/cbg_executor.hpp"
 
 #include <chrono>
 #include <functional>
@@ -30,14 +30,28 @@
 #include "rclcpp/node.hpp"
 #include <inttypes.h>
 #include "detail/callback_group_scheduler.hpp"
+#include "detail/timer_manager.hpp"
 // #include "rclcpp/executors/detail/any_executable_weak_ref.hpp"
 
 namespace rclcpp::executors
 {
 
+struct GuardConditionWithFunction
+{
+  GuardConditionWithFunction(rclcpp::GuardCondition::SharedPtr gc, std::function<void(void)> fun) :
+    guard_condition(std::move(gc)), handle_guard_condition_fun(std::move(fun))
+  {
+  }
+
+  rclcpp::GuardCondition::SharedPtr guard_condition;
+
+  // A function that should be executed if the guard_condition is ready
+  std::function<void(void)> handle_guard_condition_fun;
+};
+
 template <class ExecutableType_T>
 struct WeakExecutableWithScheduler {
-    WeakExecutableWithScheduler ( const std::shared_ptr<ExecutableType_T> &executable, CallbackGroupScheduler *scheduler )
+    WeakExecutableWithScheduler ( const std::shared_ptr<ExecutableType_T> &executable, CallbackGroupSchedulerEv *scheduler )
         : executable ( executable ), scheduler ( scheduler )
     {
     }
@@ -50,7 +64,7 @@ struct WeakExecutableWithScheduler {
 
 
     std::weak_ptr<ExecutableType> executable;
-    CallbackGroupScheduler *scheduler;
+    CallbackGroupSchedulerEv *scheduler;
 
     bool processed;
 
@@ -72,183 +86,11 @@ using WeakClientRef = WeakExecutableWithScheduler<rclcpp::ClientBase>;
 using WeakServiceRef = WeakExecutableWithScheduler<rclcpp::ServiceBase>;
 using WeakWaitableRef = WeakExecutableWithScheduler<rclcpp::Waitable>;
 
-class TimerQueue
-{
-    struct TimerData
-    {
-        std::shared_ptr<const rcl_timer_t> rcl_ref;
-        std::function<void()> timer_ready_callback;
-    };
-
-public:
-    TimerQueue(rcl_clock_type_t timer_type) :
-        timer_type(timer_type),
-        used_clock_for_timers(timer_type)
-    {
-    };
-
-    void add_timer ( const rclcpp::TimerBase::SharedPtr &timer, std::function<void()> timer_ready_callback)
-    {
-        rcl_clock_t *clock_type_of_timer;
-
-        std::shared_ptr<const rcl_timer_t> handle = timer->get_timer_handle();
-
-        if(rcl_timer_clock(const_cast<rcl_timer_t *>(handle.get()), &clock_type_of_timer) != RCL_RET_OK)
-        {
-            assert(false);
-        };
-
-        if(clock_type_of_timer->type != timer_type)
-        {
-            // timer is handled by another queue
-            return;
-        }
-
-        std::unique_ptr<TimerData> data = std::make_unique<TimerData>();
-        data->timer_ready_callback = std::move(timer_ready_callback);
-        data->rcl_ref = std::move(handle);
-
-        timer->set_on_reset_callback ( [data_ptr = data.get(), this] ( size_t ) {
-            add_timer_to_running_map(data_ptr);
-        } );
-
-        {
-            std::scoped_lock l(mutex);
-            add_timer_to_running_map(data.get());
-
-            all_timers.emplace_back ( std::move(data) );
-        }
-
-        //wake up thread as new timer was added
-        thread_conditional.notify_all();
-    };
-
-    void add_timer_to_running_map(const TimerData *timer_data)
-    {
-        if(timer_data->rcl_ref.unique())
-        {
-            // timer was deleted
-            auto it = std::find_if(all_timers.begin(), all_timers.end(), [timer_data] (const std::unique_ptr<TimerData> &e) {
-                return timer_data == e.get();
-            }
-            );
-
-            if(it != all_timers.end())
-            {
-                all_timers.erase(it);
-            }
-            return;
-        }
-
-        int64_t next_call_time;
-
-        auto ret = rcl_timer_get_next_call_time(timer_data->rcl_ref.get(), &next_call_time);
-
-        if(ret == RCL_RET_OK)
-        {
-            running_timers.emplace(next_call_time, timer_data);
-        }
-    }
-
-    /**
-     * Returns the time when the next timer becomes ready
-     */
-    std::chrono::nanoseconds get_next_timer_ready_time() const
-    {
-        if(running_timers.empty())
-        {
-            return std::chrono::nanoseconds::max();
-        }
-        return running_timers.begin()->first;
-    }
-
-    void call_ready_timer_callbacks()
-    {
-        auto readd_timer_to_running_map = [this] (TimerMap::node_type &&e)
-        {
-            const auto &timer_data = e.mapped();
-            if(timer_data->rcl_ref.unique())
-            {
-                // timer was deleted
-                auto it = std::find_if(all_timers.begin(), all_timers.end(), [timer_data] (const std::unique_ptr<TimerData> &e) {
-                    return timer_data == e.get();
-                }
-                );
-
-                if(it != all_timers.end())
-                {
-                    all_timers.erase(it);
-                }
-                return;
-            }
-
-            int64_t next_call_time;
-
-            auto ret = rcl_timer_get_next_call_time(timer_data->rcl_ref.get(), &next_call_time);
-
-            if(ret == RCL_RET_OK)
-            {
-                e.key() = std::chrono::nanoseconds(next_call_time);
-                running_timers.insert(std::move(e));
-            }
-        };
-
-        while(!running_timers.empty())
-        {
-            int64_t time_until_call;
-
-            auto ret = rcl_timer_get_time_until_next_call(running_timers.begin()->second->rcl_ref.get(), &time_until_call);
-            if(ret == RCL_RET_TIMER_CANCELED)
-            {
-                running_timers.erase(running_timers.begin());
-                continue;
-            }
-
-            if(time_until_call <= 0)
-            {
-                running_timers.begin()->second->timer_ready_callback();
-                readd_timer_to_running_map(running_timers.extract(running_timers.begin()));
-                continue;
-            }
-            break;
-        }
-    }
-
-    void timer_thread()
-    {
-        while(running)
-        {
-            {
-                std::scoped_lock l(mutex);
-
-                call_ready_timer_callbacks();
-
-                std::chrono::nanoseconds next_wakeup_time = get_next_timer_ready_time();
-
-                used_clock_for_timers.sleep_until(rclcpp::Time(next_wakeup_time.count(), timer_type), thread_conditional);
-            }
-        }
-    };
-
-private:
-    rcl_clock_type_t timer_type;
-    rclcpp::Clock used_clock_for_timers;
-
-    std::mutex mutex;
-
-    bool running = true;
-
-    std::vector<std::unique_ptr<TimerData>> all_timers;
-
-    using TimerMap = std::multimap<std::chrono::nanoseconds, const TimerData *>;
-    TimerMap running_timers;
-
-    std::condition_variable thread_conditional;
-};
 
 struct WeakExecutableCache {
-    WeakExecutableCache ( CallbackGroupSchedulerEv &scheduler ) :
-        scheduler ( scheduler )
+    WeakExecutableCache ( CallbackGroupSchedulerEv &scheduler, TimerManager &timer_manager) :
+        scheduler ( scheduler ),
+        timer_manager(timer_manager)
     {
     }
 
@@ -263,11 +105,8 @@ struct WeakExecutableCache {
 
     CallbackGroupSchedulerEv &scheduler;
 
-    TimerQueue steady_timers;
-    TimerQueue system_timers;
-    TimerQueue ros_timers;
+    TimerManager &timer_manager;
 
-    std::array<TimerQueue, 3> timer_queues;
 
     bool cache_ditry = true;
 
@@ -307,15 +146,9 @@ struct WeakExecutableCache {
                                            );
         };
         const auto add_timer = [this] ( const rclcpp::TimerBase::SharedPtr &s ) {
-
-            for(TimerQueue &q : timer_queues)
-            {
-                q.add_timer(s);
-            }
-
-//             timer_manager->add_timer ( s, [weak_ptr = rclcpp::TimerBase::WeakPtr ( s ), this] ( const TimerBase * ) mutable {
-//                 scheduler.add_ready_executable ( weak_ptr );
-//             } );
+            timer_manager.add_timer(s, [weak_ptr = rclcpp::TimerBase::WeakPtr ( s ), this] ( ) mutable {
+                scheduler.add_ready_executable ( weak_ptr );
+            } );
         };
 
         const auto add_client = [this] ( const rclcpp::ClientBase::SharedPtr &s ) {
@@ -393,14 +226,15 @@ EventsCBGExecutor::EventsCBGExecutor (
     interrupt_guard_condition_ ( std::make_shared<rclcpp::GuardCondition> ( options.context ) ),
     shutdown_guard_condition_ ( std::make_shared<rclcpp::GuardCondition> ( options.context ) ),
     context_ ( options.context ),
-    global_executable_cache ( std::make_unique<WeakExecutableWithRclHandleCache>() ),
-    nodes_executable_cache ( std::make_unique<WeakExecutableWithRclHandleCache>() )
+    timer_manager(std::make_unique<TimerManager>()),
+    global_executable_cache ( std::make_unique<WeakExecutableCache>() ),
+    nodes_executable_cache ( std::make_unique<WeakExecutableCache>() )
 {
 
-    global_executable_cache->add_guard_condition (
+    global_executable_cache->add_guard_condition_event (
         interrupt_guard_condition_,
         std::function<void ( void ) >() );
-    global_executable_cache->add_guard_condition (
+    global_executable_cache->add_guard_condition_event (
     shutdown_guard_condition_, [this] () {
         work_ready_conditional.notify_all();
     } );
@@ -589,7 +423,7 @@ void EventsCBGExecutor::sync_callback_groups()
 
     std::set<CallbackGroup *> added_cbgs;
 
-    auto insert_data = [&cur_group_data, &next_group_data, &added_cbgs] ( rclcpp::CallbackGroup::SharedPtr &&cbg ) {
+    auto insert_data = [&cur_group_data, &next_group_data, &added_cbgs, this] ( rclcpp::CallbackGroup::SharedPtr &&cbg ) {
         // nodes may share callback groups, therefore we need to make sure we only add them once
         if ( added_cbgs.find ( cbg.get() ) != added_cbgs.end() ) {
             return;
@@ -609,7 +443,7 @@ void EventsCBGExecutor::sync_callback_groups()
 
         CallbackGroupData new_entry;
         new_entry.scheduler = std::make_unique<CallbackGroupSchedulerEv>();
-        new_entry.executable_cache = std::make_unique<WeakExecutableCache> ( *new_entry.scheduler );
+        new_entry.executable_cache = std::make_unique<WeakExecutableCache> ( *new_entry.scheduler, *timer_manager );
         new_entry.executable_cache->regenerate_events ( *cbg );
         new_entry.callback_group = std::move ( cbg );
         next_group_data.push_back ( std::move ( new_entry ) );
@@ -647,7 +481,7 @@ void EventsCBGExecutor::sync_callback_groups()
                 } );
 
                 // register node guard condition, and trigger resync on node change event
-                nodes_executable_cache->add_guard_condition ( node_ptr->get_shared_notify_guard_condition(),
+                nodes_executable_cache->add_guard_condition_event( node_ptr->get_shared_notify_guard_condition(),
                 [this] () {
 //                                     RCUTILS_LOG_INFO("Node changed GC triggered");
                     needs_callback_group_resync.store ( true );

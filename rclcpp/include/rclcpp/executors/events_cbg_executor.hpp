@@ -28,7 +28,7 @@
 #include "rclcpp/macros.hpp"
 #include "rclcpp/memory_strategies.hpp"
 #include "rclcpp/visibility_control.hpp"
-#include <rclcpp/experimental/timers_manager.hpp>
+
 namespace rclcpp
 {
 namespace executors
@@ -37,6 +37,7 @@ namespace executors
   class CallbackGroupSchedulerEv;
   struct WeakExecutableCache;
   struct AnyExecutableCbgEv;
+  class TimerManager;
 
 class EventsCBGExecutor : public rclcpp::Executor
 {
@@ -276,12 +277,14 @@ private:
   /// The context associated with this executor.
   std::shared_ptr<rclcpp::Context> context_;
 
+  std::unique_ptr<TimerManager> timer_manager;
+
   /// Stores the executables for the internal guard conditions
   /// e.g. interrupt_guard_condition_ and shutdown_guard_condition_
-//   std::unique_ptr<WeakExecutableWithRclHandleCache> global_executable_cache;
+  std::unique_ptr<WeakExecutableCache> global_executable_cache;
 
   /// Stores the executables for guard conditions of the nodes
-//   std::unique_ptr<WeakExecutableWithRclHandleCache> nodes_executable_cache;
+  std::unique_ptr<WeakExecutableCache> nodes_executable_cache;
 
   std::mutex conditional_mutex;
   std::condition_variable work_ready_conditional;

@@ -20,7 +20,7 @@
 #include "performance_test_fixture/performance_test_fixture.hpp"
 
 #include "rclcpp/rclcpp.hpp"
-#include "rclcpp/executors/cbg_executor.hpp"
+#include "rclcpp/executors/events_cbg_executor.hpp"
 #include "rcpputils/scope_exit.hpp"
 #include "test_msgs/msg/empty.hpp"
 
@@ -231,7 +231,7 @@ BENCHMARK_F(PerformanceTestExecutor, multi_thread_executor_spin_some)(benchmark:
 
 BENCHMARK_F(PerformanceTestExecutor, cbg_executor_spin_some)(benchmark::State & st)
 {
-  executor_spin_some<rclcpp::executors::CBGExecutor>(st);
+  executor_spin_some<rclcpp::executors::EventsCBGExecutor>(st);
 }
 
 
@@ -252,7 +252,7 @@ BENCHMARK_F(PerformanceTestExecutor, multi_thread_executor_wait_for_work)(benchm
 
 BENCHMARK_F(PerformanceTestExecutor, cbg_executor_wait_for_work)(benchmark::State & st)
 {
-  benchmark_wait_for_work<rclcpp::executors::CBGExecutor>(st);
+  benchmark_wait_for_work<rclcpp::executors::EventsCBGExecutor>(st);
 }
 
 
@@ -273,7 +273,7 @@ BENCHMARK_F(PerformanceTestExecutor, multi_thread_executor_wait_for_work_rebuild
 
 BENCHMARK_F(PerformanceTestExecutor, cbg_executor_wait_for_work_rebuild)(benchmark::State & st)
 {
-  benchmark_wait_for_work_force_rebuild<rclcpp::executors::CBGExecutor>(st);
+  benchmark_wait_for_work_force_rebuild<rclcpp::executors::EventsCBGExecutor>(st);
 }
 
 class CallbackWaitable : public rclcpp::Waitable
@@ -506,7 +506,7 @@ BENCHMARK_F(CascadedPerformanceTestExecutor, multi_thread_executor_spin)(benchma
 
 BENCHMARK_F(CascadedPerformanceTestExecutor, cbg_executor_spin)(benchmark::State & st)
 {
-  executor_spin_some<rclcpp::executors::CBGExecutor>(st);
+  executor_spin_some<rclcpp::executors::EventsCBGExecutor>(st);
 }
 
 
@@ -627,7 +627,7 @@ BENCHMARK_F(
   PerformanceTestExecutorMultipleCallbackGroups,
   cbg_executor_spin_some)(benchmark::State & st)
 {
-  executor_spin_some<rclcpp::executors::CBGExecutor>(st);
+  executor_spin_some<rclcpp::executors::EventsCBGExecutor>(st);
 }
 
 class PerformanceTestExecutorSimple : public PerformanceTest
@@ -759,12 +759,12 @@ BENCHMARK_F(PerformanceTestExecutorSimple, multi_thread_executor_remove_node)(be
 
 BENCHMARK_F(PerformanceTestExecutorSimple, cbg_executor_add_node)(benchmark::State & st)
 {
-  add_node<rclcpp::executors::CBGExecutor>(st);
+  add_node<rclcpp::executors::EventsCBGExecutor>(st);
 }
 
 BENCHMARK_F(PerformanceTestExecutorSimple, cbg_executor_remove_node)(benchmark::State & st)
 {
-  remove_node<rclcpp::executors::CBGExecutor>(st);
+  remove_node<rclcpp::executors::EventsCBGExecutor>(st);
 }
 
 BENCHMARK_F(
@@ -799,7 +799,7 @@ BENCHMARK_F(
   PerformanceTestExecutorSimple,
   cbg_executor_spin_node_until_future_complete)(benchmark::State & st)
 {
-  spin_node_until_future_complete<rclcpp::executors::CBGExecutor>(st);
+  spin_node_until_future_complete<rclcpp::executors::EventsCBGExecutor>(st);
 }
 
 BENCHMARK_F(
@@ -981,93 +981,93 @@ BENCHMARK_F(SharedPtrHolder,
     rclcpp::shutdown();
 }
 
-BENCHMARK_F(SharedPtrHolder,
-  push_ref)(benchmark::State & st)
-{
-    rclcpp::init(0, nullptr);
-
-    rclcpp::Node node("FooNode");
-
-    const size_t size = 80;
-
-    std::vector<any_exec> execs;
-
-    std::vector<rclcpp::SubscriptionBase::SharedPtr> ptrs;
-    ptrs.reserve(size);
-    for(size_t i = 0; i < size; i++ )
-    {
-       ptrs.emplace_back(node.create_subscription<test_msgs::msg::Empty>(
-              "/foo" + std::to_string(i), rclcpp::QoS(10), [] (const test_msgs::msg::Empty &/*msg*/) {}));
-    }
-    execs.clear();
-    execs.reserve(size);
-
-    for(size_t i = 0; i < size; i++ )
-    {
-        execs.emplace_back(ptrs[i]);
-    }
-    std::vector<rclcpp::executors::AnyRef> subscribers;
-
-    for (auto _ : st) {
-    (void)_;
-
-      subscribers.clear();
-      subscribers.reserve(size);
-      for(size_t i = 0; i < size; i++ )
-      {
-        auto handle_shr_ptr = ptrs[i]->get_subscription_handle();
-
-//         subscribers.push_back(rclcpp::executors::SubscriberRef(ptrs[i], handle_shr_ptr , nullptr));
-
-      }
-    }
-
-    rclcpp::shutdown();
-}
-
-BENCHMARK_F(SharedPtrHolder,
-  emplace_ref)(benchmark::State & st)
-{
-    rclcpp::init(0, nullptr);
-
-    rclcpp::Node node("FooNode");
-
-    const size_t size = 80;
-
-    std::vector<any_exec> execs;
-
-    std::vector<rclcpp::SubscriptionBase::SharedPtr> ptrs;
-    ptrs.reserve(size);
-    for(size_t i = 0; i < size; i++ )
-    {
-       ptrs.emplace_back(node.create_subscription<test_msgs::msg::Empty>(
-              "/foo" + std::to_string(i), rclcpp::QoS(10), [] (const test_msgs::msg::Empty &/*msg*/) {}));
-    }
-    execs.clear();
-    execs.reserve(size);
-
-    for(size_t i = 0; i < size; i++ )
-    {
-        execs.emplace_back(ptrs[i]);
-    }
-    std::vector<rclcpp::executors::AnyRef> subscribers;
-
-    for (auto _ : st) {
-    (void)_;
-
-      subscribers.clear();
-      subscribers.reserve(size);
-      for(size_t i = 0; i < size; i++ )
-      {
-        auto handle_shr_ptr = ptrs[i]->get_subscription_handle();
-
-//         subscribers.emplace_back(rclcpp::executors::SubscriberRef(ptrs[i], handle_shr_ptr , nullptr));
-
-      }
-    }
-
-    rclcpp::shutdown();
-}
+// BENCHMARK_F(SharedPtrHolder,
+//   push_ref)(benchmark::State & st)
+// {
+//     rclcpp::init(0, nullptr);
+//
+//     rclcpp::Node node("FooNode");
+//
+//     const size_t size = 80;
+//
+//     std::vector<any_exec> execs;
+//
+//     std::vector<rclcpp::SubscriptionBase::SharedPtr> ptrs;
+//     ptrs.reserve(size);
+//     for(size_t i = 0; i < size; i++ )
+//     {
+//        ptrs.emplace_back(node.create_subscription<test_msgs::msg::Empty>(
+//               "/foo" + std::to_string(i), rclcpp::QoS(10), [] (const test_msgs::msg::Empty &/*msg*/) {}));
+//     }
+//     execs.clear();
+//     execs.reserve(size);
+//
+//     for(size_t i = 0; i < size; i++ )
+//     {
+//         execs.emplace_back(ptrs[i]);
+//     }
+//     std::vector<rclcpp::executors::AnyRef> subscribers;
+//
+//     for (auto _ : st) {
+//     (void)_;
+//
+//       subscribers.clear();
+//       subscribers.reserve(size);
+//       for(size_t i = 0; i < size; i++ )
+//       {
+//         auto handle_shr_ptr = ptrs[i]->get_subscription_handle();
+//
+// //         subscribers.push_back(rclcpp::executors::SubscriberRef(ptrs[i], handle_shr_ptr , nullptr));
+//
+//       }
+//     }
+//
+//     rclcpp::shutdown();
+// }
+//
+// BENCHMARK_F(SharedPtrHolder,
+//   emplace_ref)(benchmark::State & st)
+// {
+//     rclcpp::init(0, nullptr);
+//
+//     rclcpp::Node node("FooNode");
+//
+//     const size_t size = 80;
+//
+//     std::vector<any_exec> execs;
+//
+//     std::vector<rclcpp::SubscriptionBase::SharedPtr> ptrs;
+//     ptrs.reserve(size);
+//     for(size_t i = 0; i < size; i++ )
+//     {
+//        ptrs.emplace_back(node.create_subscription<test_msgs::msg::Empty>(
+//               "/foo" + std::to_string(i), rclcpp::QoS(10), [] (const test_msgs::msg::Empty &/*msg*/) {}));
+//     }
+//     execs.clear();
+//     execs.reserve(size);
+//
+//     for(size_t i = 0; i < size; i++ )
+//     {
+//         execs.emplace_back(ptrs[i]);
+//     }
+//     std::vector<rclcpp::executors::AnyRef> subscribers;
+//
+//     for (auto _ : st) {
+//     (void)_;
+//
+//       subscribers.clear();
+//       subscribers.reserve(size);
+//       for(size_t i = 0; i < size; i++ )
+//       {
+//         auto handle_shr_ptr = ptrs[i]->get_subscription_handle();
+//
+// //         subscribers.emplace_back(rclcpp::executors::SubscriberRef(ptrs[i], handle_shr_ptr , nullptr));
+//
+//       }
+//     }
+//
+//     rclcpp::shutdown();
+// }
 BENCHMARK_F(SharedPtrHolder,
   switch_and_cast_insert)(benchmark::State & st)
 {
