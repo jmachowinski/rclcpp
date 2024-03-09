@@ -35,9 +35,41 @@ public:
     ~TimerQueue()
     {
         running = false;
-        thread_conditional.notify_all();
+
+        while(!thread_terminated.load())
+        {
+            thread_conditional.notify_one();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
 
         trigger_thread.join();
+    }
+
+    void remove_timer (const rclcpp::TimerBase::SharedPtr &timer)
+    {
+        timer->clear_on_reset_callback();
+
+        std::scoped_lock l(mutex);
+
+        auto it = std::find_if(all_timers.begin(), all_timers.end(), [rcl_ref = timer->get_timer_handle()] (const std::unique_ptr<TimerData> &d)
+        {
+            return d->rcl_ref == rcl_ref;
+        });
+
+        if(it != all_timers.end())
+        {
+            const TimerData *data_ptr = it->get();
+
+
+            auto it2 = std::find_if(running_timers.begin(), running_timers.end(), [data_ptr] (const auto &e) {
+                return e.second == data_ptr;
+            });
+
+            running_timers.erase(it2);
+            all_timers.erase(it);
+        }
+
+        thread_conditional.notify_all();
     }
 
     void add_timer ( const rclcpp::TimerBase::SharedPtr &timer, const std::function<void()> &timer_ready_callback)
@@ -123,8 +155,10 @@ public:
     {
         if(running_timers.empty())
         {
-            // wired bug, if you return max, the clock wakes up instant
-            return std::chrono::nanoseconds::max() - std::chrono::nanoseconds(1000);
+            // can't use std::chrono::nanoseconds::max, as wait_for
+            // internally computes end time by using ::now() + timeout
+            // as a workaround, we use some absurd high timeout
+            return std::chrono::hours(10000);
         }
         return running_timers.begin()->first;
     }
@@ -194,7 +228,8 @@ public:
 
     void timer_thread()
     {
-        while(running)
+        RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::timer_thread starting");
+        while(running && rclcpp::ok ())
         {
             std::chrono::nanoseconds next_wakeup_time;
             {
@@ -204,19 +239,49 @@ public:
 
                 next_wakeup_time = get_next_timer_ready_time();
             }
+            try {
 //             RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::timer_thread before sleep, next wakeup time %+" PRId64 , next_wakeup_time.count());
-            used_clock_for_timers.sleep_until(rclcpp::Time(next_wakeup_time.count(), timer_type), thread_conditional, false);
+                used_clock_for_timers.sleep_until(rclcpp::Time(next_wakeup_time.count(), timer_type), thread_conditional, false);
+            }
+            catch(const std::runtime_error &)
+            {
+                //there is a race on shutdown, were the context may become invalid, while we call sleep_until
+                running = false;
+            }
 //             RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::timer_thread after sleep");
+/*
+            if(!rclcpp::contexts::get_global_default_context()->shutdown_reason().empty())
+            {
+                break;
+            }*/
+
         }
+        thread_terminated = true;
+        RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::timer_thread terminating");
+
     };
+
+    void stop()
+    {
+        running = false;
+        while(!thread_terminated.load())
+        {
+            thread_conditional.notify_one();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
 
 private:
     rcl_clock_type_t timer_type;
+
+    Context::SharedPtr clock_sleep_context;
+
     rclcpp::Clock used_clock_for_timers;
 
     std::mutex mutex;
 
-    bool running = true;
+    std::atomic_bool running = true;
+    std::atomic_bool thread_terminated = false;
 
     std::vector<std::unique_ptr<TimerData>> all_timers;
 
@@ -236,7 +301,16 @@ public:
     TimerManager() :
         timer_queues{RCL_ROS_TIME, RCL_SYSTEM_TIME, RCL_STEADY_TIME}
     {
+
     };
+
+    void remove_timer (const rclcpp::TimerBase::SharedPtr &timer)
+    {
+        for(TimerQueue &q : timer_queues)
+        {
+            q.remove_timer(timer);
+        }
+    }
 
     void add_timer ( const rclcpp::TimerBase::SharedPtr &timer, const std::function<void()> &timer_ready_callback)
     {
@@ -247,5 +321,13 @@ public:
             q.add_timer(timer, timer_ready_callback);
         }
     };
+
+    void stop()
+    {
+        for(TimerQueue &q : timer_queues)
+        {
+            q.stop();
+        }
+    }
 };
 }

@@ -231,7 +231,11 @@ protected:
 
   bool execute_ready_executables_until(const std::chrono::time_point<std::chrono::steady_clock> &stop_time);
 
+  void unregister_event_callbacks(const rclcpp::CallbackGroup::SharedPtr &cbg) const;
+
 private:
+  void remove_all_nodes_and_callback_groups();
+
   void do_housekeeping();
 
   void sync_callback_groups();

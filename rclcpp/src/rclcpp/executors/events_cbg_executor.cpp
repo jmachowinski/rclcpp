@@ -134,6 +134,49 @@ struct WeakExecutableCache {
 
     TimerManager &timer_manager;
 
+    ~WeakExecutableCache()
+    {
+        for(const auto &timer_ref : timers)
+        {
+            auto shr_ptr = timer_ref.executable.lock();
+            if(shr_ptr)
+            {
+                shr_ptr->clear_on_reset_callback();
+            }
+        }
+        for(const auto &timer_ref : subscribers)
+        {
+            auto shr_ptr = timer_ref.executable.lock();
+            if(shr_ptr)
+            {
+                shr_ptr->clear_on_new_message_callback();
+            }
+        }
+        for(const auto &timer_ref : clients)
+        {
+            auto shr_ptr = timer_ref.executable.lock();
+            if(shr_ptr)
+            {
+                shr_ptr->clear_on_new_response_callback();
+            }
+        }
+        for(const auto &timer_ref : services)
+        {
+            auto shr_ptr = timer_ref.executable.lock();
+            if(shr_ptr)
+            {
+                shr_ptr->clear_on_new_request_callback();
+            }
+        }
+        for(const auto &timer_ref : waitables)
+        {
+            auto shr_ptr = timer_ref.executable.lock();
+            if(shr_ptr)
+            {
+                shr_ptr->clear_on_ready_callback();
+            }
+        }
+    }
 
 //     bool cache_ditry = true;
 
@@ -203,6 +246,18 @@ struct WeakExecutableCache {
 
         add_guard_condition_event ( callback_group->get_notify_guard_condition(), [weak_ptr = rclcpp::CallbackGroup::WeakPtr(callback_group), this]() {
 //         RCUTILS_LOG_ERROR_NAMED("rclcpp", "GC: Callback group was changed");
+            //FIXME this need to be done in the spin thread
+
+            if(!rclcpp::contexts::get_global_default_context()->shutdown_reason().empty())
+            {
+                return;
+            }
+
+            if(!rclcpp::ok(rclcpp::contexts::get_global_default_context()))
+            {
+                return;
+            }
+
             rclcpp::CallbackGroup::SharedPtr cbg = weak_ptr.lock();
 
             if(cbg)
@@ -260,7 +315,16 @@ EventsCBGExecutor::EventsCBGExecutor (
 //         std::function<void ( void ) >() );
     global_executable_cache->add_guard_condition_event (
     shutdown_guard_condition_, [this] () {
+
+        RCUTILS_LOG_ERROR_NAMED ("rclcpp", "Shutdown guard condition triggered !");
+        spinning = false;
+
         work_ready_conditional.notify_all();
+
+        remove_all_nodes_and_callback_groups();
+
+        //FIXME deadlock
+//         timer_manager->stop();
     } );
 
 
@@ -295,9 +359,28 @@ EventsCBGExecutor::EventsCBGExecutor (
 
 EventsCBGExecutor::~EventsCBGExecutor()
 {
+    //we need to shut down the timer manager first, as it might access the Schedulers
+    timer_manager.reset();
+
+    // signal all processing threads to shut down
+    spinning = false;
 
     work_ready_conditional.notify_all();
 
+    remove_all_nodes_and_callback_groups();
+
+    // Remove shutdown callback handle registered to Context
+    if ( !context_->remove_on_shutdown_callback ( shutdown_callback_handle_ ) ) {
+        RCUTILS_LOG_ERROR_NAMED (
+            "rclcpp",
+            "failed to remove registered on_shutdown callback" );
+        rcl_reset_error();
+    }
+
+}
+
+void EventsCBGExecutor::remove_all_nodes_and_callback_groups()
+{
     std::vector<node_interfaces::NodeBaseInterface::WeakPtr> added_nodes_cpy;
     {
         std::lock_guard lock{added_nodes_mutex_};
@@ -323,15 +406,6 @@ EventsCBGExecutor::~EventsCBGExecutor()
             remove_callback_group ( shr_ptr, false );
         }
     }
-
-    // Remove shutdown callback handle registered to Context
-    if ( !context_->remove_on_shutdown_callback ( shutdown_callback_handle_ ) ) {
-        RCUTILS_LOG_ERROR_NAMED (
-            "rclcpp",
-            "failed to remove registered on_shutdown callback" );
-        rcl_reset_error();
-    }
-
 }
 
 bool EventsCBGExecutor::execute_ready_executables_until ( const std::chrono::time_point<std::chrono::steady_clock> &stop_time )
@@ -513,7 +587,7 @@ void EventsCBGExecutor::sync_callback_groups()
                 // register node guard condition, and trigger resync on node change event
                 nodes_executable_cache->add_guard_condition_event( node_ptr->get_shared_notify_guard_condition(),
                 [this] () {
-                                    RCUTILS_LOG_INFO("Node changed GC triggered");
+                    RCUTILS_LOG_INFO("Node changed GC triggered");
                     needs_callback_group_resync.store ( true );
                     work_ready_conditional.notify_one();
                 } );
@@ -604,17 +678,41 @@ void EventsCBGExecutor::spin_once_internal ( std::chrono::nanoseconds timeout )
         }
 
         if ( !get_next_ready_executable ( any_exec ) ) {
+            RCUTILS_LOG_INFO("spin_once_internal: No work, going to sleep");
+
+            if(timeout < std::chrono::nanoseconds::zero())
+            {
+                // can't use std::chrono::nanoseconds::max, as wait_for
+                // internally computes end time by using ::now() + timeout
+                // as a workaround, we use some absurd high timeout
+                timeout = std::chrono::hours(10000);
+            }
 
             std::unique_lock lk ( conditional_mutex );
-            work_ready_conditional.wait_for ( lk, timeout );
+            std::cv_status ret = work_ready_conditional.wait_for ( lk, timeout );
+
+            switch(ret)
+            {
+                case std::cv_status::no_timeout:
+                    RCUTILS_LOG_INFO("spin_once_internal: Woken up by trigger");
+                    break;
+                case std::cv_status::timeout:
+                    RCUTILS_LOG_INFO("spin_once_internal: Woken up by timeout");
+                    break;
+            }
+
 
             if ( !get_next_ready_executable ( any_exec ) ) {
+                RCUTILS_LOG_INFO("spin_once_internal: Still no work, return (timeout ?)");
                 return;
             }
         }
     }
 
+    RCUTILS_LOG_INFO("spin_once_internal: Executing work");
+
     any_exec.execute_function();
+    any_exec.callback_group->can_be_taken_from().store ( true );
 }
 
 void
@@ -772,6 +870,38 @@ EventsCBGExecutor::get_all_callback_groups()
     return added_callback_groups;
 }
 
+void EventsCBGExecutor::unregister_event_callbacks(const rclcpp::CallbackGroup::SharedPtr &cbg) const
+{
+    const auto remove_sub = [] ( const rclcpp::SubscriptionBase::SharedPtr &s ) {
+        s->clear_on_new_message_callback();
+    };
+    const auto remove_timer = [this] ( const rclcpp::TimerBase::SharedPtr &s ) {
+        timer_manager->remove_timer(s);
+    };
+
+    const auto remove_client = [] ( const rclcpp::ClientBase::SharedPtr &s ) {
+        s->clear_on_new_response_callback();
+    };
+
+    const auto remove_service = [] ( const rclcpp::ServiceBase::SharedPtr &s ) {
+        s->clear_on_new_request_callback();
+    };
+
+    auto gc_ptr = cbg->get_notify_guard_condition();
+    if(gc_ptr)
+    {
+        gc_ptr->set_on_trigger_callback(std::function<void(size_t)>());
+    }
+
+    const auto remove_waitable = [] ( const rclcpp::Waitable::SharedPtr &s ) {
+        s->clear_on_ready_callback();
+    };
+
+
+    cbg->collect_all_ptrs ( remove_sub, remove_service, remove_client, remove_timer, remove_waitable );
+}
+
+
 void
 EventsCBGExecutor::remove_callback_group (
     rclcpp::CallbackGroup::SharedPtr group_ptr,
@@ -797,6 +927,9 @@ EventsCBGExecutor::remove_callback_group (
         } ), added_callback_groups.end() );
         added_callback_groups.push_back ( group_ptr );
     }
+
+    //we need to unregister all callbacks
+    unregister_event_callbacks(group_ptr);
 
     if ( found ) {
         needs_callback_group_resync = true;
@@ -870,6 +1003,12 @@ EventsCBGExecutor::remove_node (
             return false;
         } ), added_nodes.end() );
     }
+
+    node_ptr->for_each_callback_group([this] (rclcpp::CallbackGroup::SharedPtr cbg)
+    {
+        unregister_event_callbacks(cbg);
+    }
+    );
 
     needs_callback_group_resync = true;
 

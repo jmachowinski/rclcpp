@@ -106,6 +106,13 @@ Clock::sleep_until(
       context->remove_on_shutdown_callback(shutdown_cb_handle);
     });
 
+//   // check needed, as due to a race the shutdown_cb_handle might have
+//   // been added after the shutdown
+//   if(!context->shutdown_reason().empty())
+//   {
+//     return false;
+//   }
+
   if (this_clock_type == RCL_STEADY_TIME) {
     // Synchronize because RCL steady clock epoch might differ from chrono::steady_clock epoch
     const Time rcl_entry = now();
