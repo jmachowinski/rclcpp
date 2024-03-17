@@ -611,11 +611,16 @@ TYPED_TEST(TestExecutors, testSpinUntilFutureCompleteInterrupted)
   // Force interruption
   rclcpp::shutdown();
 
+  RCUTILS_LOG_INFO("Test shutdown complete");
+
+
   // Give it time to exit
   auto start = std::chrono::steady_clock::now();
   while (!spin_exited && (std::chrono::steady_clock::now() - start) < 1s) {
     std::this_thread::sleep_for(1ms);
   }
+
+  RCUTILS_LOG_INFO("before join of spin thread");
 
   EXPECT_TRUE(spin_exited);
   spinner.join();
@@ -939,8 +944,12 @@ TYPED_TEST(TestIntraprocessExecutors, testIntraprocessRetrigger) {
   ExecutorType executor;
   executor.add_node(this->node);
 
+  RCUTILS_LOG_ERROR_NAMED("rclcpp", "Before publish");
+
   EXPECT_EQ(0u, this->callback_count.load());
   this->publisher->publish(test_msgs::msg::Empty());
+
+  RCUTILS_LOG_ERROR_NAMED("rclcpp", "After publish");
 
   // Wait for up to 5 seconds for the first message to come available.
   const std::chrono::milliseconds sleep_per_loop(10);

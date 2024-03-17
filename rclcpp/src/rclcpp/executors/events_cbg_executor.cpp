@@ -91,6 +91,13 @@ struct GloablaWeakExecutableCache
 {
     std::vector<GuardConditionWithFunction> guard_conditions;
 
+    ~GloablaWeakExecutableCache()
+    {
+        for(const auto &gc_ref : guard_conditions)
+        {
+            gc_ref.guard_condition->set_on_trigger_callback(nullptr);
+        }
+    }
 
     void add_guard_condition_event ( rclcpp::GuardCondition::SharedPtr ptr, std::function<void ( void ) > fun )
     {
@@ -176,6 +183,10 @@ struct WeakExecutableCache {
                 shr_ptr->clear_on_ready_callback();
             }
         }
+        for(const auto &gc_ref : guard_conditions)
+        {
+            gc_ref.guard_condition->set_on_trigger_callback(nullptr);
+        }
     }
 
 //     bool cache_ditry = true;
@@ -195,7 +206,7 @@ struct WeakExecutableCache {
     {
         clear();
 
-          RCUTILS_LOG_ERROR_NAMED("rclcpp", "regenerate_events");
+          RCUTILS_LOG_ERROR_NAMED("rclcpp", "FOOOOO regenerate_events");
 
 
         // we reserve to much memory here, this this should be fine
@@ -211,6 +222,7 @@ struct WeakExecutableCache {
             //element not found, add new one
 //       auto &entry = subscribers.emplace_back(WeakSubscriberRef(s, &scheduler));
             s->set_on_new_message_callback ( [weak_ptr = rclcpp::SubscriptionBase::WeakPtr ( s ), this] ( size_t nr_msg ) mutable {
+                RCUTILS_LOG_ERROR_NAMED("rclcpp", "subscriber got data");
                 for ( size_t i = 0; i < nr_msg; i++ )
                 {
                     scheduler.add_ready_executable ( weak_ptr );
@@ -243,10 +255,9 @@ struct WeakExecutableCache {
             });
         };
 
+        auto cbFun = [weak_ptr = rclcpp::CallbackGroup::WeakPtr(callback_group), this]() {
 
-        add_guard_condition_event ( callback_group->get_notify_guard_condition(), [weak_ptr = rclcpp::CallbackGroup::WeakPtr(callback_group), this]() {
-//         RCUTILS_LOG_ERROR_NAMED("rclcpp", "GC: Callback group was changed");
-            //FIXME this need to be done in the spin thread
+            RCUTILS_LOG_ERROR_NAMED("rclcpp", "GC: Callback group was changed");
 
             if(!rclcpp::contexts::get_global_default_context()->shutdown_reason().empty())
             {
@@ -264,7 +275,15 @@ struct WeakExecutableCache {
             {
                 regenerate_events(cbg);
             }
-        } );
+        };
+
+        add_guard_condition_event ( callback_group->get_notify_guard_condition(), [cbFun, this] () {
+            RCUTILS_LOG_INFO("Callback group nofity callback !!!!!!!!!!!!");
+
+
+            scheduler.add_ready_executable(CallbackEventType(cbFun));
+        }
+        );
 
         const auto add_waitable = [this] ( const rclcpp::Waitable::SharedPtr &s ) {
             s->set_on_ready_callback ( [weak_ptr = rclcpp::Waitable::WeakPtr ( s ), this] ( size_t nr_msg, int internal_ev_type ) mutable {
@@ -287,8 +306,8 @@ struct WeakExecutableCache {
 
         if(new_entry.handle_guard_condition_fun)
         {
-            new_entry.guard_condition->set_on_trigger_callback([fun = new_entry.handle_guard_condition_fun, this] ( size_t /*nr_events*/ ) {
-                scheduler.add_ready_executable(fun);
+            new_entry.guard_condition->set_on_trigger_callback([fun2 = new_entry.handle_guard_condition_fun, this] ( size_t /*nr_events*/ ) {
+                scheduler.add_ready_executable(CallbackEventType(fun2));
             } );
         }
     }
@@ -317,11 +336,13 @@ EventsCBGExecutor::EventsCBGExecutor (
     shutdown_guard_condition_, [this] () {
 
         RCUTILS_LOG_ERROR_NAMED ("rclcpp", "Shutdown guard condition triggered !");
+
+        remove_all_nodes_and_callback_groups();
+
         spinning = false;
 
         work_ready_conditional.notify_all();
 
-        remove_all_nodes_and_callback_groups();
 
         //FIXME deadlock
 //         timer_manager->stop();
@@ -412,7 +433,7 @@ bool EventsCBGExecutor::execute_ready_executables_until ( const std::chrono::tim
 {
     bool found_work = false;
 
-    for ( size_t i = CallbackGroupSchedulerEv::Priorities::Timer;
+    for ( size_t i = CallbackGroupSchedulerEv::Priorities::Calls;
             i <= CallbackGroupSchedulerEv::Priorities::Waitable; i++ ) {
         CallbackGroupSchedulerEv::Priorities cur_prio ( static_cast<CallbackGroupSchedulerEv::Priorities> ( i ) );
 
@@ -470,7 +491,7 @@ bool EventsCBGExecutor::get_next_ready_executable ( AnyExecutableCbgEv & any_exe
 
     bool found_work = false;
 
-    for ( size_t i = CallbackGroupSchedulerEv::Priorities::Timer;
+    for ( size_t i = CallbackGroupSchedulerEv::Priorities::Calls;
             i <= CallbackGroupSchedulerEv::Priorities::Waitable; i++ ) {
         CallbackGroupSchedulerEv::Priorities cur_prio ( static_cast<CallbackGroupSchedulerEv::Priorities> ( i ) );
         for ( ReadyCallbacksWithSharedPtr & ready_elem: ready_callbacks ) {
@@ -661,6 +682,7 @@ EventsCBGExecutor::run ( size_t this_thread_number )
             continue;
         }
 
+        RCUTILS_LOG_ERROR_NAMED("rclcpp", "Executing work");
         any_exec.execute_function();
         any_exec.callback_group->can_be_taken_from().store ( true );
 
@@ -764,7 +786,7 @@ bool EventsCBGExecutor::collect_and_execute_ready_events (
 
     //FIXME this is super hard to do, we need to know when to stop
 
-    while ( rclcpp::ok ( this->context_ ) && spinning && cur_time < end_time ) {
+    while ( rclcpp::ok ( this->context_ ) && spinning && cur_time <= end_time ) {
         if ( !execute_ready_executables_until ( end_time ) ) {
 
             if ( !first_collect && !recollect_if_no_work_available ) {
@@ -968,14 +990,16 @@ EventsCBGExecutor::add_node ( rclcpp::node_interfaces::NodeBaseInterface::Shared
 
     work_ready_conditional.notify_one();
 
-    if ( notify ) {
-        // Interrupt waiting to handle new node
-        try {
-            interrupt_guard_condition_->trigger();
-        } catch ( const rclcpp::exceptions::RCLError & ex ) {
-            throw std::runtime_error (
-                std::string (
-                    "Failed to trigger guard condition on callback group add: " ) + ex.what() );
+
+//     node_ptr->get_notify_guard_condition();
+
+
+    {
+        std::lock_guard g ( callback_groups_mutex );
+
+        if(!spinning)
+        {
+            sync_callback_groups();
         }
     }
 }

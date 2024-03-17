@@ -185,16 +185,16 @@ private:
         AnyExecutableCbgEv & any_executable,
         const WaitableWithEventType & ev)
     {
-        auto shr_ptr = ev.waitable.lock();
-        if(!shr_ptr)
+        auto shr_ptr_in = ev.waitable.lock();
+        if(!shr_ptr_in)
         {
             return false;
         }
-        auto data = shr_ptr->take_data_by_entity_id(ev.internal_event_type);
+        auto data_in = shr_ptr_in->take_data_by_entity_id(ev.internal_event_type);
 
-        any_executable.execute_function = [shr_ptr = std::move(shr_ptr), data = std::move(data)] () {
-            std::shared_ptr<void> cpy = std::move(data);
-            shr_ptr->execute(cpy);
+        any_executable.execute_function = [shr_ptr = std::move(shr_ptr_in), data = std::move(data_in)] () mutable {
+            RCUTILS_LOG_INFO("Before execute of waitable");
+            shr_ptr->execute(data);
         };
 
         return true;
