@@ -193,7 +193,7 @@ private:
         auto data_in = shr_ptr_in->take_data_by_entity_id(ev.internal_event_type);
 
         any_executable.execute_function = [shr_ptr = std::move(shr_ptr_in), data = std::move(data_in)] () mutable {
-            RCUTILS_LOG_INFO("Before execute of waitable");
+//             RCUTILS_LOG_INFO("Before execute of waitable");
             shr_ptr->execute(data);
         };
 
@@ -247,37 +247,37 @@ public:
     void add_ready_executable(rclcpp::SubscriptionBase::WeakPtr & executable)
     {
         ready_subscriptions.add_ready_executable(executable);
-        RCUTILS_LOG_INFO("Subscription got data");
+//         RCUTILS_LOG_INFO("Subscription got data");
         work_available.notify_one();
     }
     void add_ready_executable(rclcpp::ServiceBase::WeakPtr & executable)
     {
         ready_services.add_ready_executable(executable);
-        RCUTILS_LOG_INFO("Service got data");
+//         RCUTILS_LOG_INFO("Service got data");
         work_available.notify_one();
     }
     void add_ready_executable(rclcpp::TimerBase::WeakPtr & executable)
     {
         ready_timers.add_ready_executable(executable);
-        RCUTILS_LOG_INFO("Timer got data");
+//         RCUTILS_LOG_INFO("Timer got data");
         work_available.notify_one();
     }
     void add_ready_executable(rclcpp::ClientBase::WeakPtr & executable)
     {
         ready_clients.add_ready_executable(executable);
-        RCUTILS_LOG_INFO("Client got data");
+//         RCUTILS_LOG_INFO("Client got data");
         work_available.notify_one();
     }
     void add_ready_executable(const WaitableWithEventType & executable)
     {
         ready_waitables.add_ready_executable(executable);
-        RCUTILS_LOG_INFO("Waitable got data");
+//         RCUTILS_LOG_INFO("Waitable got data");
         work_available.notify_one();
     }
     void add_ready_executable(const CallbackEventType & executable)
     {
         ready_calls.add_ready_executable(executable);
-        RCUTILS_LOG_INFO("Callback got data");
+//         RCUTILS_LOG_INFO("Callback got data");
         work_available.notify_one();
     }
 

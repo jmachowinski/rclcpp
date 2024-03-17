@@ -206,7 +206,7 @@ struct WeakExecutableCache {
     {
         clear();
 
-          RCUTILS_LOG_ERROR_NAMED("rclcpp", "FOOOOO regenerate_events");
+//           RCUTILS_LOG_ERROR_NAMED("rclcpp", "FOOOOO regenerate_events");
 
 
         // we reserve to much memory here, this this should be fine
@@ -222,7 +222,7 @@ struct WeakExecutableCache {
             //element not found, add new one
 //       auto &entry = subscribers.emplace_back(WeakSubscriberRef(s, &scheduler));
             s->set_on_new_message_callback ( [weak_ptr = rclcpp::SubscriptionBase::WeakPtr ( s ), this] ( size_t nr_msg ) mutable {
-                RCUTILS_LOG_ERROR_NAMED("rclcpp", "subscriber got data");
+//                 RCUTILS_LOG_ERROR_NAMED("rclcpp", "subscriber got data");
                 for ( size_t i = 0; i < nr_msg; i++ )
                 {
                     scheduler.add_ready_executable ( weak_ptr );
@@ -231,7 +231,7 @@ struct WeakExecutableCache {
         };
         const auto add_timer = [this] ( const rclcpp::TimerBase::SharedPtr &s ) {
             timer_manager.add_timer(s, [weak_ptr = rclcpp::TimerBase::WeakPtr ( s ), this] ( ) mutable {
-                RCUTILS_LOG_ERROR_NAMED("rclcpp", "added timer executable");
+//                 RCUTILS_LOG_ERROR_NAMED("rclcpp", "added timer executable");
 
                 scheduler.add_ready_executable ( weak_ptr );
             } );
@@ -257,7 +257,7 @@ struct WeakExecutableCache {
 
         auto cbFun = [weak_ptr = rclcpp::CallbackGroup::WeakPtr(callback_group), this]() {
 
-            RCUTILS_LOG_ERROR_NAMED("rclcpp", "GC: Callback group was changed");
+//             RCUTILS_LOG_ERROR_NAMED("rclcpp", "GC: Callback group was changed");
 
             if(!rclcpp::contexts::get_global_default_context()->shutdown_reason().empty())
             {
@@ -278,7 +278,7 @@ struct WeakExecutableCache {
         };
 
         add_guard_condition_event ( callback_group->get_notify_guard_condition(), [cbFun, this] () {
-            RCUTILS_LOG_INFO("Callback group nofity callback !!!!!!!!!!!!");
+//             RCUTILS_LOG_INFO("Callback group nofity callback !!!!!!!!!!!!");
 
 
             scheduler.add_ready_executable(CallbackEventType(cbFun));
@@ -335,7 +335,7 @@ EventsCBGExecutor::EventsCBGExecutor (
     global_executable_cache->add_guard_condition_event (
     shutdown_guard_condition_, [this] () {
 
-        RCUTILS_LOG_ERROR_NAMED ("rclcpp", "Shutdown guard condition triggered !");
+//         RCUTILS_LOG_ERROR_NAMED ("rclcpp", "Shutdown guard condition triggered !");
 
         remove_all_nodes_and_callback_groups();
 
@@ -529,7 +529,7 @@ void EventsCBGExecutor::sync_callback_groups()
     if ( !needs_callback_group_resync.exchange ( false ) ) {
         return;
     }
-    RCUTILS_LOG_ERROR_NAMED("rclcpp", "sync_callback_groups");
+//     RCUTILS_LOG_ERROR_NAMED("rclcpp", "sync_callback_groups");
 
     std::vector<std::pair<CallbackGroupData *, rclcpp::CallbackGroup::SharedPtr>> cur_group_data;
     cur_group_data.reserve ( callback_groups.size() );
@@ -593,7 +593,7 @@ void EventsCBGExecutor::sync_callback_groups()
         nodes_executable_cache->clear();
 //         nodes_executable_cache->guard_conditions.reserve(added_nodes_cpy.size());
 
-        RCUTILS_LOG_ERROR("Added node size is %lu", added_nodes_cpy.size());
+//         RCUTILS_LOG_ERROR("Added node size is %lu", added_nodes_cpy.size());
 
         for ( const node_interfaces::NodeBaseInterface::WeakPtr & node_weak_ptr : added_nodes_cpy ) {
             auto node_ptr = node_weak_ptr.lock();
@@ -608,7 +608,7 @@ void EventsCBGExecutor::sync_callback_groups()
                 // register node guard condition, and trigger resync on node change event
                 nodes_executable_cache->add_guard_condition_event( node_ptr->get_shared_notify_guard_condition(),
                 [this] () {
-                    RCUTILS_LOG_INFO("Node changed GC triggered");
+//                     RCUTILS_LOG_INFO("Node changed GC triggered");
                     needs_callback_group_resync.store ( true );
                     work_ready_conditional.notify_one();
                 } );
@@ -675,20 +675,20 @@ EventsCBGExecutor::run ( size_t this_thread_number )
 
             if ( spinning.load() ) {
                 std::unique_lock lk ( conditional_mutex );
-                RCUTILS_LOG_ERROR_NAMED("rclcpp", "going to sleep");
+//                 RCUTILS_LOG_ERROR_NAMED("rclcpp", "going to sleep");
                 work_ready_conditional.wait ( lk );
             }
-                RCUTILS_LOG_ERROR_NAMED("rclcpp", "woken up");
+//                 RCUTILS_LOG_ERROR_NAMED("rclcpp", "woken up");
             continue;
         }
 
-        RCUTILS_LOG_ERROR_NAMED("rclcpp", "Executing work");
+//         RCUTILS_LOG_ERROR_NAMED("rclcpp", "Executing work");
         any_exec.execute_function();
         any_exec.callback_group->can_be_taken_from().store ( true );
 
     }
 
-    RCUTILS_LOG_INFO("Stopping execution thread");
+//     RCUTILS_LOG_INFO("Stopping execution thread");
 }
 
 void EventsCBGExecutor::spin_once_internal ( std::chrono::nanoseconds timeout )
@@ -700,7 +700,7 @@ void EventsCBGExecutor::spin_once_internal ( std::chrono::nanoseconds timeout )
         }
 
         if ( !get_next_ready_executable ( any_exec ) ) {
-            RCUTILS_LOG_INFO("spin_once_internal: No work, going to sleep");
+//             RCUTILS_LOG_INFO("spin_once_internal: No work, going to sleep");
 
             if(timeout < std::chrono::nanoseconds::zero())
             {
@@ -716,22 +716,22 @@ void EventsCBGExecutor::spin_once_internal ( std::chrono::nanoseconds timeout )
             switch(ret)
             {
                 case std::cv_status::no_timeout:
-                    RCUTILS_LOG_INFO("spin_once_internal: Woken up by trigger");
+//                     RCUTILS_LOG_INFO("spin_once_internal: Woken up by trigger");
                     break;
                 case std::cv_status::timeout:
-                    RCUTILS_LOG_INFO("spin_once_internal: Woken up by timeout");
+//                     RCUTILS_LOG_INFO("spin_once_internal: Woken up by timeout");
                     break;
             }
 
 
             if ( !get_next_ready_executable ( any_exec ) ) {
-                RCUTILS_LOG_INFO("spin_once_internal: Still no work, return (timeout ?)");
+//                 RCUTILS_LOG_INFO("spin_once_internal: Still no work, return (timeout ?)");
                 return;
             }
         }
     }
 
-    RCUTILS_LOG_INFO("spin_once_internal: Executing work");
+//     RCUTILS_LOG_INFO("spin_once_internal: Executing work");
 
     any_exec.execute_function();
     any_exec.callback_group->can_be_taken_from().store ( true );

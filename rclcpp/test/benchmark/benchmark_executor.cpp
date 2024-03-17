@@ -250,10 +250,10 @@ BENCHMARK_F(PerformanceTestExecutor, multi_thread_executor_wait_for_work)(benchm
   benchmark_wait_for_work<rclcpp::executors::MultiThreadedExecutor>(st);
 }
 
-BENCHMARK_F(PerformanceTestExecutor, cbg_executor_wait_for_work)(benchmark::State & st)
-{
-  benchmark_wait_for_work<rclcpp::executors::EventsCBGExecutor>(st);
-}
+// BENCHMARK_F(PerformanceTestExecutor, cbg_executor_wait_for_work)(benchmark::State & st)
+// {
+//   benchmark_wait_for_work<rclcpp::executors::EventsCBGExecutor>(st);
+// }
 
 
 BENCHMARK_F(PerformanceTestExecutor, single_thread_executor_wait_for_work_rebuild)(benchmark::State & st)
@@ -271,10 +271,10 @@ BENCHMARK_F(PerformanceTestExecutor, multi_thread_executor_wait_for_work_rebuild
   benchmark_wait_for_work_force_rebuild<rclcpp::executors::MultiThreadedExecutor>(st);
 }
 
-BENCHMARK_F(PerformanceTestExecutor, cbg_executor_wait_for_work_rebuild)(benchmark::State & st)
-{
-  benchmark_wait_for_work_force_rebuild<rclcpp::executors::EventsCBGExecutor>(st);
-}
+// BENCHMARK_F(PerformanceTestExecutor, cbg_executor_wait_for_work_rebuild)(benchmark::State & st)
+// {
+//   benchmark_wait_for_work_force_rebuild<rclcpp::executors::EventsCBGExecutor>(st);
+// }
 
 class CallbackWaitable : public rclcpp::Waitable
 {
@@ -345,6 +345,21 @@ public:
   size_t
   get_number_of_ready_guard_conditions() override {return 1;}
 
+
+  void
+  set_on_ready_callback(std::function<void(size_t, int)> callback) override
+  {
+    auto gc_callback = [callback](size_t count) {
+        callback(count, 0);
+      };
+    gc.set_on_trigger_callback(gc_callback);
+  }
+
+  void
+  clear_on_ready_callback() override
+  {
+    gc.set_on_trigger_callback(nullptr);
+  }
 
 private:
   std::atomic<bool> has_trigger = false;

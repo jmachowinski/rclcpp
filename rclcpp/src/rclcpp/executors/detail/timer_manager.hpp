@@ -89,7 +89,7 @@ public:
             return;
         }
 
-        RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::add_timer matching timer");
+//         RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::add_timer matching timer");
 
 
         std::unique_ptr<TimerData> data = std::make_unique<TimerData>();
@@ -98,7 +98,7 @@ public:
         data->rcl_ref = std::move(handle);
 
         timer->set_on_reset_callback ( [data_ptr = data.get(), this] ( size_t ) {
-            RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::timer reset lambda");
+//             RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::timer reset lambda");
             add_timer_to_running_map(data_ptr);
         } );
 
@@ -109,7 +109,7 @@ public:
             all_timers.emplace_back ( std::move(data) );
         }
 
-        RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::waking clock");
+//         RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::waking clock");
 
         //wake up thread as new timer was added
         thread_conditional.notify_all();
@@ -228,7 +228,7 @@ public:
 
     void timer_thread()
     {
-        RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::timer_thread starting");
+//         RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::timer_thread starting");
         while(running && rclcpp::ok ())
         {
             std::chrono::nanoseconds next_wakeup_time;
@@ -257,7 +257,7 @@ public:
 
         }
         thread_terminated = true;
-        RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::timer_thread terminating");
+//         RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerQueue::timer_thread terminating");
 
     };
 
@@ -314,7 +314,7 @@ public:
 
     void add_timer ( const rclcpp::TimerBase::SharedPtr &timer, const std::function<void()> &timer_ready_callback)
     {
-        RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerManager::add_timer");
+//         RCUTILS_LOG_ERROR_NAMED("rclcpp", "TimerManager::add_timer");
 
         for(TimerQueue &q : timer_queues)
         {
