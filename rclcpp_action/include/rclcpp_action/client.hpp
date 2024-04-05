@@ -409,8 +409,15 @@ public:
    * If the goal is rejected by an action server, then the future is set to a `nullptr`.
    *
    * The returned goal handle is used to monitor the status of the goal and get the final result.
-   * It is valid as long as you hold a reference to the shared pointer or until the
-   * rclcpp_action::Client is destroyed at which point the goal status will become UNKNOWN.
+   *
+   * WARNING this function has an unwanted behavior regarding to the live time of the goal, due to a bug.
+   * If options.result_callback is not set, the goal will be valid as long as the caller holds a reference
+   * to the GoalHandle::SharedPtr contained in the returned future.
+   *
+   * If options.result_callback is set, the goal will be valid, until the goal result_callback was called, regardless
+   * of the GoalHandle::SharedPtr.
+   *
+   * If a goal becomes invalid or rclcpp_action::Client is destroyed the goal status will become UNKNOWN.
    *
    * \param[in] goal The goal request.
    * \param[in] options Options for sending the goal request. Contains references to callbacks for
@@ -421,66 +428,28 @@ public:
   [[nodiscard]] std::shared_future<typename GoalHandle::SharedPtr>
   async_send_goal(const Goal & goal, const SendGoalOptions & options = SendGoalOptions())
   {
-    // Put promise in the heap to move it around.
-    auto promise = std::make_shared<std::promise<typename GoalHandle::SharedPtr>>();
-    std::shared_future<typename GoalHandle::SharedPtr> future(promise->get_future());
-    using GoalRequest = typename ActionT::Impl::SendGoalService::Request;
-    auto goal_request = std::make_shared<GoalRequest>();
-    goal_request->goal_id.uuid = this->generate_goal_id();
-    goal_request->goal = goal;
-    this->send_goal_request(
-      std::static_pointer_cast<void>(goal_request),
-      [this, goal_request, options, promise](std::shared_ptr<void> response) mutable
-      {
-        using GoalResponse = typename ActionT::Impl::SendGoalService::Response;
-        auto goal_response = std::static_pointer_cast<GoalResponse>(response);
-        if (!goal_response->accepted) {
-          promise->set_value(nullptr);
-          if (options.goal_response_callback) {
-            options.goal_response_callback(nullptr);
-          }
-          return;
-        }
-        GoalInfo goal_info;
-        goal_info.goal_id.uuid = goal_request->goal_id.uuid;
-        goal_info.stamp = goal_response->stamp;
-        // Do not use std::make_shared as friendship cannot be forwarded.
-        std::shared_ptr<GoalHandle> goal_handle(
-          new GoalHandle(goal_info, options.feedback_callback, options.result_callback));
-        {
-          std::lock_guard<std::recursive_mutex> guard(goal_handles_mutex_);
-          goal_handles_[goal_handle->get_goal_id()] = goal_handle;
-        }
-        promise->set_value(goal_handle);
-        if (options.goal_response_callback) {
-          options.goal_response_callback(goal_handle);
-        }
+    return async_send_goal(goal, options, true);
+  }
 
-        if (options.result_callback) {
-          this->make_result_aware(goal_handle);
-        }
-      });
-
-    // TODO(jacobperron): Encapsulate into it's own function and
-    //                    consider exposing an option to disable this cleanup
-    // To prevent the list from growing out of control, forget about any goals
-    // with no more user references
-    {
-      std::lock_guard<std::recursive_mutex> guard(goal_handles_mutex_);
-      auto goal_handle_it = goal_handles_.begin();
-      while (goal_handle_it != goal_handles_.end()) {
-        if (!goal_handle_it->second.lock()) {
-          RCLCPP_DEBUG(
-            this->get_logger(),
-            "Dropping weak reference to goal handle during send_goal()");
-          goal_handle_it = goal_handles_.erase(goal_handle_it);
-        } else {
-          ++goal_handle_it;
-        }
-      }
-    }
-
-    return future;
+  /// Send an action goal and asynchronously get the result.
+  /**
+   * If the goal is accepted by an action server, the returned future is set to a `ClientGoalHandle`.
+   * If the goal is rejected by an action server, then the future is set to a `nullptr`.
+   *
+   * The returned goal handle is used to monitor the status of the goal and get the final result.
+   * It is valid as long as you hold a reference to the shared pointer or until the
+   * rclcpp_action::Client is destroyed at which point the goal status will become UNKNOWN.
+   *
+   * \param[in] goal The goal request.
+   * \param[in] options Options for sending the goal request. Contains references to callbacks for
+   *   the goal response (accepted/rejected), feedback, and the final result.
+   * \return A future that completes when the goal has been accepted or rejected.
+   *   If the goal is rejected, then the result will be a `nullptr`.
+   */
+  [[nodiscard]] std::shared_future<typename GoalHandle::SharedPtr>
+  async_send_goal_unowned(const Goal & goal, const SendGoalOptions & options = SendGoalOptions())
+  {
+    return async_send_goal(goal, options, false);
   }
 
   /// Asynchronously get the result for an active goal.
@@ -562,11 +531,28 @@ public:
     return async_cancel(cancel_request, cancel_callback);
   }
 
+  /// Cancel the goal in a thread safe way
+  /**
+   * Note, this will cancel the goal, regardless of existing
+   * references to the goal_handle.
+   * After the call to this function, it is guaranteed that there
+   * will be no more callbacks from the goal. This is not the case
+   * if multiple threads are involved, and the goal_handle is just
+   * dropped.
+   *
+   * \param[in] goal_handle The goal that shall be canceled
+   */
   void drop_goal_handle(typename GoalHandle::SharedPtr goal_handle)
   {
     drop_goal_handle(goal_handle->get_goal_id());
   }
 
+  /// Cancel the goal in a thread safe way
+  /**
+   * For more information see drop_goal_handle(typename GoalHandle::SharedPtr goal_handle).
+   *
+   * \param[in] goal_id The goal_id of the goal that shall be canceled
+   */
   void drop_goal_handle(const GoalUUID & goal_id)
   {
     std::lock_guard<std::recursive_mutex> guard(goal_handles_mutex_);
@@ -718,6 +704,50 @@ private:
   }
 
   /// \internal
+  /// Buggy version, this version captures the goal_handle in the lambda
+  /// and thus keeping it alive. This version is kept to keep a backwards
+  /// compatibility during a deprecation phase.
+  void
+  make_result_aware_owning(typename GoalHandle::SharedPtr goal_handle)
+  {
+    // Avoid making more than one request
+    if (goal_handle->set_result_awareness(true)) {
+      return;
+    }
+    using GoalResultRequest = typename ActionT::Impl::GetResultService::Request;
+    auto goal_result_request = std::make_shared<GoalResultRequest>();
+    goal_result_request->goal_id.uuid = goal_handle->get_goal_id();
+    try {
+      this->send_result_request(
+        std::static_pointer_cast<void>(goal_result_request),
+        [goal_handle, this](std::shared_ptr<void> response) mutable
+        {
+          std::lock_guard<std::recursive_mutex> lock(goal_handles_mutex_);
+          if (goal_handles_.count(goal_handle->get_goal_id()) == 0) {
+            RCLCPP_DEBUG(
+              this->get_logger(),
+              "Received result for unknown goal. Ignoring...");
+            return;
+          }
+
+          // Wrap the response in a struct with the fields a user cares about
+          WrappedResult wrapped_result;
+          using GoalResultResponse = typename ActionT::Impl::GetResultService::Response;
+          auto result_response = std::static_pointer_cast<GoalResultResponse>(response);
+          wrapped_result.result = std::make_shared<typename ActionT::Result>();
+          *wrapped_result.result = result_response->result;
+          wrapped_result.goal_id = goal_handle->get_goal_id();
+          wrapped_result.code = static_cast<ResultCode>(result_response->status);
+          goal_handle->set_result(wrapped_result);
+          goal_handles_.erase(goal_handle->get_goal_id());
+        });
+    } catch (rclcpp::exceptions::RCLError & ex) {
+      // This will cause an exception when the user tries to access the result
+      goal_handle->invalidate(exceptions::UnawareGoalHandleError(ex.message));
+    }
+  }
+
+  /// \internal
   void
   make_result_aware(typename GoalHandle::SharedPtr goal_handle)
   {
@@ -766,6 +796,77 @@ private:
       // This will cause an exception when the user tries to access the result
       goal_handle->invalidate(exceptions::UnawareGoalHandleError(ex.message));
     }
+  }
+
+  /// \internal
+  [[nodiscard]] std::shared_future<typename GoalHandle::SharedPtr>
+  async_send_goal(const Goal & goal, const SendGoalOptions & options, bool keep_goal_alive)
+  {
+    // Put promise in the heap to move it around.
+    auto promise = std::make_shared<std::promise<typename GoalHandle::SharedPtr>>();
+    std::shared_future<typename GoalHandle::SharedPtr> future(promise->get_future());
+    using GoalRequest = typename ActionT::Impl::SendGoalService::Request;
+    auto goal_request = std::make_shared<GoalRequest>();
+    goal_request->goal_id.uuid = this->generate_goal_id();
+    goal_request->goal = goal;
+    this->send_goal_request(
+      std::static_pointer_cast<void>(goal_request),
+      [this, goal_request, options, promise,
+      keep_goal_alive](std::shared_ptr<void> response) mutable
+      {
+        using GoalResponse = typename ActionT::Impl::SendGoalService::Response;
+        auto goal_response = std::static_pointer_cast<GoalResponse>(response);
+        if (!goal_response->accepted) {
+          promise->set_value(nullptr);
+          if (options.goal_response_callback) {
+            options.goal_response_callback(nullptr);
+          }
+          return;
+        }
+        GoalInfo goal_info;
+        goal_info.goal_id.uuid = goal_request->goal_id.uuid;
+        goal_info.stamp = goal_response->stamp;
+        // Do not use std::make_shared as friendship cannot be forwarded.
+        std::shared_ptr<GoalHandle> goal_handle(
+          new GoalHandle(goal_info, options.feedback_callback, options.result_callback));
+        {
+          std::lock_guard<std::recursive_mutex> guard(goal_handles_mutex_);
+          goal_handles_[goal_handle->get_goal_id()] = goal_handle;
+        }
+        promise->set_value(goal_handle);
+        if (options.goal_response_callback) {
+          options.goal_response_callback(goal_handle);
+        }
+
+        if (options.result_callback) {
+          if(keep_goal_alive) {
+            this->make_result_aware_owning(goal_handle);
+          } else {
+            this->make_result_aware(goal_handle);
+          }
+        }
+      });
+
+    // TODO(jacobperron): Encapsulate into it's own function and
+    //                    consider exposing an option to disable this cleanup
+    // To prevent the list from growing out of control, forget about any goals
+    // with no more user references
+    {
+      std::lock_guard<std::recursive_mutex> guard(goal_handles_mutex_);
+      auto goal_handle_it = goal_handles_.begin();
+      while (goal_handle_it != goal_handles_.end()) {
+        if (!goal_handle_it->second.lock()) {
+          RCLCPP_DEBUG(
+            this->get_logger(),
+            "Dropping weak reference to goal handle during send_goal()");
+          goal_handle_it = goal_handles_.erase(goal_handle_it);
+        } else {
+          ++goal_handle_it;
+        }
+      }
+    }
+
+    return future;
   }
 
   /// \internal
