@@ -55,6 +55,10 @@ ExecutorNotifyWaitable::add_to_wait_set(rcl_wait_set_t & wait_set)
     rcl_guard_condition_t * cond = &guard_condition->get_rcl_guard_condition();
     rcl_ret_t ret = rcl_wait_set_add_guard_condition(&wait_set, cond, NULL);
 
+    if(was_triggered) {
+      guard_condition->trigger();
+    }
+
     if (RCL_RET_OK != ret) {
       rclcpp::exceptions::throw_from_rcl_error(
         ret, "failed to add guard condition to wait set");
@@ -67,7 +71,6 @@ ExecutorNotifyWaitable::is_ready(const rcl_wait_set_t & wait_set)
 {
   std::lock_guard<std::mutex> lock(guard_condition_mutex_);
 
-  bool any_ready = false;
   for (size_t ii = 0; ii < wait_set.size_of_guard_conditions; ++ii) {
     const auto * rcl_guard_condition = wait_set.guard_conditions[ii];
 
@@ -77,12 +80,11 @@ ExecutorNotifyWaitable::is_ready(const rcl_wait_set_t & wait_set)
     for (const auto & weak_guard_condition : this->notify_guard_conditions_) {
       auto guard_condition = weak_guard_condition.lock();
       if (guard_condition && &guard_condition->get_rcl_guard_condition() == rcl_guard_condition) {
-        any_ready = true;
-        break;
+        return true;
       }
     }
   }
-  return any_ready;
+  return false;
 }
 
 void
@@ -95,6 +97,8 @@ ExecutorNotifyWaitable::execute(const std::shared_ptr<void> & data)
 std::shared_ptr<void>
 ExecutorNotifyWaitable::take_data()
 {
+  was_triggered = false;
+
   return nullptr;
 }
 
@@ -151,9 +155,13 @@ ExecutorNotifyWaitable::add_guard_condition(rclcpp::GuardCondition::WeakPtr weak
   auto guard_condition = weak_guard_condition.lock();
   if (guard_condition && notify_guard_conditions_.count(weak_guard_condition) == 0) {
     notify_guard_conditions_.insert(weak_guard_condition);
-    if (on_ready_callback_) {
-      guard_condition->set_on_trigger_callback(on_ready_callback_);
+    guard_condition->set_on_trigger_callback([this](size_t cnt){
+        was_triggered = true;
+        if (on_ready_callback_) {
+          on_ready_callback_(cnt);
+        }
     }
+    );
   }
 }
 
@@ -164,8 +172,8 @@ ExecutorNotifyWaitable::remove_guard_condition(rclcpp::GuardCondition::WeakPtr w
   if (notify_guard_conditions_.count(weak_guard_condition) != 0) {
     notify_guard_conditions_.erase(weak_guard_condition);
     auto guard_condition = weak_guard_condition.lock();
-    // If this notify waitable doesn't have an on_ready_callback, then there's nothing to unset
-    if (guard_condition && on_ready_callback_) {
+    // clear the callback we used to be notified about the trigger
+    if (guard_condition) {
       guard_condition->set_on_trigger_callback(nullptr);
     }
   }

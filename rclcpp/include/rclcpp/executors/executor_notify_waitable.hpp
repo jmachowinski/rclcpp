@@ -140,6 +140,8 @@ public:
   get_number_of_ready_guard_conditions() override;
 
 private:
+  std::atomic<bool> was_triggered = false;
+
   /// Callback to run when waitable executes
   std::function<void(void)> execute_callback_;
 
