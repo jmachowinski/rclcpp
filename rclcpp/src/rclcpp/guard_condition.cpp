@@ -69,11 +69,6 @@ GuardCondition::get_rcl_guard_condition() const
 void
 GuardCondition::trigger()
 {
-  rcl_ret_t ret = rcl_trigger_guard_condition(&rcl_guard_condition_);
-  if (RCL_RET_OK != ret) {
-    rclcpp::exceptions::throw_from_rcl_error(ret);
-  }
-
   {
     std::lock_guard<std::recursive_mutex> lock(reentrant_mutex_);
 
@@ -82,6 +77,10 @@ GuardCondition::trigger()
     } else {
       unread_count_++;
     }
+  }
+  rcl_ret_t ret = rcl_trigger_guard_condition(&rcl_guard_condition_);
+  if (RCL_RET_OK != ret) {
+    rclcpp::exceptions::throw_from_rcl_error(ret);
   }
 }
 
