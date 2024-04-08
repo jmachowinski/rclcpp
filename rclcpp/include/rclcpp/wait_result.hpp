@@ -142,18 +142,8 @@ public:
     }
   }
 
-  /// Get the next ready timer and its index in the wait result, but do not clear it.
+  /// Get the next ready timer and its index in the wait result
   /**
-   * The returned timer is not cleared automatically, as it the case with the
-   * other next_ready_*()-like functions.
-   * Instead, this function returns the timer and the index that identifies it
-   * in the wait result, so that it can be cleared (marked as taken or used)
-   * in a separate step with clear_timer_with_index().
-   * This is necessary in some multi-threaded executor implementations.
-   *
-   * If the timer is not cleared using the index, subsequent calls to this
-   * function will return the same timer.
-   *
    * If there is no ready timer, then nullptr will be returned and the index
    * will be invalid and should not be used.
    *
@@ -164,44 +154,24 @@ public:
    * \return next ready timer pointer and its index in the wait result, or
    *   {nullptr, start_index} if none was found.
    */
-  std::pair<std::shared_ptr<rclcpp::TimerBase>, size_t>
-  peek_next_ready_timer(size_t start_index = 0)
+  std::shared_ptr<rclcpp::TimerBase>
+  next_ready_timer()
   {
     check_wait_result_dirty();
     auto ret = std::shared_ptr<rclcpp::TimerBase>{nullptr};
-    size_t ii = start_index;
     if (this->kind() == WaitResultKind::Ready) {
       auto & wait_set = this->get_wait_set();
       auto & rcl_wait_set = wait_set.storage_get_rcl_wait_set();
-      for (; ii < wait_set.size_of_timers(); ++ii) {
-        if (rcl_wait_set.timers[ii] != nullptr) {
-          ret = wait_set.timers(ii);
+      for (; next_timer_index_ < wait_set.size_of_timers(); ++next_timer_index_) {
+        if (rcl_wait_set.timers[next_timer_index_] != nullptr) {
+          ret = wait_set.timers(next_timer_index_);
+          rcl_wait_set.timers[next_timer_index_] = nullptr;
+          ++next_timer_index_;
           break;
         }
       }
     }
-    return {ret, ii};
-  }
-
-  /// Clear the timer at the given index.
-  /**
-   * Clearing a timer from the wait result prevents it from being returned by
-   * the peek_next_ready_timer() on subsequent calls.
-   *
-   * The index should come from the peek_next_ready_timer() function, and
-   * should only be used with this function if the timer pointer was valid.
-   *
-   * \throws std::out_of_range if the given index is out of range
-   */
-  void
-  clear_timer_with_index(size_t index)
-  {
-    auto & wait_set = this->get_wait_set();
-    auto & rcl_wait_set = wait_set.storage_get_rcl_wait_set();
-    if (index >= wait_set.size_of_timers()) {
-      throw std::out_of_range("given timer index is out of range");
-    }
-    rcl_wait_set.timers[index] = nullptr;
+    return ret;
   }
 
   /// Get the next ready subscription, clearing it from the wait result.
@@ -322,6 +292,7 @@ private:
 
   WaitSetT * wait_set_pointer_ = nullptr;
 
+  size_t next_timer_index_ = 0;
   size_t next_waitable_index_ = 0;
 };
 

@@ -144,16 +144,9 @@ bool StaticSingleThreadedExecutor::execute_ready_executables(
     }
   }
 
-  size_t current_timer_index = 0;
-  while (true) {
-    auto [timer, timer_index] = wait_result.peek_next_ready_timer(current_timer_index);
-    if (nullptr == timer) {
-      break;
-    }
-    current_timer_index = timer_index;
+  while (auto timer = wait_result.next_ready_timer()) {
     auto entity_iter = collection.timers.find(timer->get_timer_handle().get());
     if (entity_iter != collection.timers.end()) {
-      wait_result.clear_timer_with_index(current_timer_index);
       auto data = timer->call();
       if (!data) {
         // someone canceled the timer between is_ready and call
