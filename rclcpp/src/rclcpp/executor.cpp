@@ -403,9 +403,7 @@ Executor::execute_any_executable(AnyExecutable & any_exec)
   }
 
   // Reset the callback_group, regardless of type
-  if (any_exec.callback_group) {
-    any_exec.callback_group->can_be_taken_from().store(true);
-  }
+  any_exec.callback_group->can_be_taken_from().store(true);
 }
 
 template<typename Taker, typename Handler>
@@ -642,7 +640,6 @@ Executor::collect_entities()
   // In the case that an entity already has an expired weak pointer
   // before being removed from the waitset, additionally prune the waitset.
   this->wait_set_.prune_deleted_entities();
-  this->entities_need_rebuild_.store(false);
 }
 
 void
@@ -655,7 +652,7 @@ Executor::wait_for_work(std::chrono::nanoseconds timeout)
 
   {
     std::lock_guard<std::mutex> guard(mutex_);
-    if (current_collection_.empty() || this->entities_need_rebuild_.load()) {
+    if (this->entities_need_rebuild_.exchange(false) || current_collection_.empty()) {
       this->collect_entities();
     }
   }
