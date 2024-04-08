@@ -183,10 +183,13 @@ public:
     if (this->kind() == WaitResultKind::Ready) {
       auto & wait_set = this->get_wait_set();
       auto & rcl_wait_set = wait_set.storage_get_rcl_wait_set();
-      for (size_t ii = 0; ii < wait_set.size_of_subscriptions(); ++ii) {
-        if (rcl_wait_set.subscriptions[ii] != nullptr) {
-          ret = wait_set.subscriptions(ii);
-          rcl_wait_set.subscriptions[ii] = nullptr;
+      for (; next_subscription_index_ < wait_set.size_of_subscriptions();
+        ++next_subscription_index_)
+      {
+        if (rcl_wait_set.subscriptions[next_subscription_index_] != nullptr) {
+          ret = wait_set.subscriptions(next_subscription_index_);
+          rcl_wait_set.subscriptions[next_subscription_index_] = nullptr;
+          ++next_subscription_index_;
           break;
         }
       }
@@ -203,10 +206,11 @@ public:
     if (this->kind() == WaitResultKind::Ready) {
       auto & wait_set = this->get_wait_set();
       auto & rcl_wait_set = wait_set.storage_get_rcl_wait_set();
-      for (size_t ii = 0; ii < wait_set.size_of_services(); ++ii) {
-        if (rcl_wait_set.services[ii] != nullptr) {
-          ret = wait_set.services(ii);
-          rcl_wait_set.services[ii] = nullptr;
+      for (; next_service_index_ < wait_set.size_of_services(); ++next_service_index_) {
+        if (rcl_wait_set.services[next_service_index_] != nullptr) {
+          ret = wait_set.services(next_service_index_);
+          rcl_wait_set.services[next_service_index_] = nullptr;
+          ++next_service_index_;
           break;
         }
       }
@@ -223,10 +227,11 @@ public:
     if (this->kind() == WaitResultKind::Ready) {
       auto & wait_set = this->get_wait_set();
       auto & rcl_wait_set = wait_set.storage_get_rcl_wait_set();
-      for (size_t ii = 0; ii < wait_set.size_of_clients(); ++ii) {
-        if (rcl_wait_set.clients[ii] != nullptr) {
-          ret = wait_set.clients(ii);
-          rcl_wait_set.clients[ii] = nullptr;
+      for (; next_client_index_ < wait_set.size_of_clients(); ++next_client_index_) {
+        if (rcl_wait_set.clients[next_client_index_] != nullptr) {
+          ret = wait_set.clients(next_client_index_);
+          rcl_wait_set.clients[next_client_index_] = nullptr;
+          ++next_client_index_;
           break;
         }
       }
@@ -245,10 +250,11 @@ public:
     if (this->kind() == WaitResultKind::Ready) {
       auto & wait_set = this->get_wait_set();
       auto rcl_wait_set = wait_set.get_rcl_wait_set();
-      while (next_waitable_index_ < wait_set.size_of_waitables()) {
-        auto cur_waitable = wait_set.waitables(next_waitable_index_++);
+      for (; next_waitable_index_ < wait_set.size_of_waitables(); ++next_waitable_index_) {
+        auto cur_waitable = wait_set.waitables(next_waitable_index_);
         if (cur_waitable != nullptr && cur_waitable->is_ready(rcl_wait_set)) {
           waitable = cur_waitable;
+          ++next_waitable_index_;
           break;
         }
       }
@@ -293,6 +299,9 @@ private:
   WaitSetT * wait_set_pointer_ = nullptr;
 
   size_t next_timer_index_ = 0;
+  size_t next_subscription_index_ = 0;
+  size_t next_service_index_ = 0;
+  size_t next_client_index_ = 0;
   size_t next_waitable_index_ = 0;
 };
 
