@@ -741,7 +741,7 @@ Executor::wait_for_work(std::chrono::nanoseconds timeout)
       if (notify_cpy->is_ready(rcl_wait_set)) {
         notify_cpy->execute(notify_cpy->take_data());
 
-        // make sure we don't loos a wakeup
+        // make sure we don't lose a wakeup
         interrupt_guard_condition_->trigger();
       }
     }
